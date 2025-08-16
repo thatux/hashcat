@@ -6,7 +6,7 @@
 SHARED                  ?= 0
 DEBUG                   := 0
 PRODUCTION              := 1
-PRODUCTION_VERSION      := v7.1.2
+PRODUCTION_VERSION      := v7.1.3
 ENABLE_CUBIN            ?= 1
 ENABLE_BRAIN            ?= 1
 ENABLE_UNRAR            ?= 1
