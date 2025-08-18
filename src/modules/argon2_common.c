@@ -34,7 +34,9 @@ u64 get_largest_memory_block_count (MAYBE_UNUSED const hashconfig_t *hashconfig,
 
   for (u32 i = 0; i < hashes->salts_cnt; i++)
   {
-    largest_memory_block_count = MAX (largest_memory_block_count, argon2_options[i].memory_block_count);
+    argon2_options = &merged_options[i].argon2_options;
+
+    largest_memory_block_count = MAX (largest_memory_block_count, argon2_options->memory_block_count);
   }
 
   return largest_memory_block_count;
@@ -156,9 +158,11 @@ char *argon2_module_jit_build_options (MAYBE_UNUSED const hashconfig_t *hashconf
 
   for (u32 i = 0; i < hashes->salts_cnt; i++)
   {
-    if (memory_block_count != argon2_options[i].memory_block_count) all_same_memory_block_count = false;
+    argon2_options = &merged_options[i].argon2_options;
 
-    if (parallelism != argon2_options[i].parallelism) all_same_parallelism = false;
+    if (memory_block_count != argon2_options->memory_block_count) all_same_memory_block_count = false;
+
+    if (parallelism != argon2_options->parallelism) all_same_parallelism = false;
   }
 
   if (all_same_memory_block_count == true)

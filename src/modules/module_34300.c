@@ -214,7 +214,7 @@ int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
   // 3. KDF UUID: sets argon2 type
   const int kdf_uuid_len = token.len[3];
   const u8 *kdf_uuid_pos = token.buf[3];
-  const u8 kdf_uuid[8] = {0};
+  const u8 kdf_uuid[8] = { 0 };
   hex_decode ((const u8 *) kdf_uuid_pos, kdf_uuid_len, (u8 *) kdf_uuid);
   if      (memcmp (SIGNATURE_ARGON2D_UUID,  kdf_uuid_pos, kdf_uuid_len) == 0) argon2_options->type = 0;
   else if (memcmp (SIGNATURE_ARGON2ID_UUID, kdf_uuid_pos, kdf_uuid_len) == 0) argon2_options->type = 2;
@@ -351,7 +351,7 @@ int module_hash_encode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
     keyfile_swap[6] = byte_swap_32 (keepass4->keyfile[6]);
     keyfile_swap[7] = byte_swap_32 (keepass4->keyfile[7]);
 
-    char keyfile_hex[65];
+    char keyfile_hex[65] = { 0 };
     hex_encode( (const u8 *) keyfile_swap, 32, (u8 *) keyfile_hex);
 
     out_len = snprintf ((char *) out_buf, line_size, "%s*%d*%d*%s*%d*%d*%d*%s*%s*%s*%s*1*%d*%s",

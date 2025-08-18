@@ -7,7 +7,7 @@
            |_____|     /___________/     |_____|  /_____/        /_______|
                  :                             :                         :
 
-hashcat v7.1.0
+hashcat v7.1.1
 ==============
 
 AMD GPUs on Linux require "AMD Radeon Software for Linux" with "ROCm"

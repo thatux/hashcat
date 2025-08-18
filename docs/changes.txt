@@ -1,3 +1,34 @@
+* changes v7.1.1 -> v7.1.x
+
+##
+## Improvements
+##
+
+- CRC Libraries: CRC restructure
+
+##
+## Bugs
+##
+
+- Argon2 Libraries: Fix call to vector datatype helper function using scalar datatype buffers
+
+* changes v7.1.0 -> v7.1.1
+
+##
+## Improvements
+##
+
+Docker: Add initial support for AMD GPUs when running Hashcat inside Docker using HIP and OpenCL
+Hardware Monitor: Suppress fan speed warnings for unified memory setups (typically internal GPUs)
+Testing Framework: Enable hardware monitor to improve testing of memory-heavy algorithms
+Unit tests: Updated install_modules.sh to use an external module for Digest::MD6
+
+##
+## Bugs
+##
+
+- Fixed multi-hash handling in LUKS2 and KeePass (KDBX4), while single-hash remained unaffected
+
 * changes v7.0.0 -> v7.1.0
 
 ##
