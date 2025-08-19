@@ -257,6 +257,12 @@ function init()
   sed 's/^echo *|.*$//'       "${cmd_file}" | awk '{print $2}'                                                                    > "${OUTD}/${hash_type}_passwords.txt"
   sed 's/^echo *|/echo "" |/' "${cmd_file}" | awk '{t="";for(i=10;i<=NF;i++){if(t){t=t" "$i}else{t=$i}};print t}' | cut -d"'" -f2 > "${OUTD}/${hash_type}_hashes.txt"
 
+  if [ "${hash_type}" -eq 34100 ]; then
+    mv "${OUTD}/${hash_type}_hashes.txt" "${OUTD}/${hash_type}_hashes.tmp"
+    cat "${OUTD}/${hash_type}_hashes.tmp" | while read f; do cat $f; done > "${OUTD}/${hash_type}_hashes.txt"
+    rm "${OUTD}/${hash_type}_hashes.tmp"
+  fi
+
   if [ "${hash_type}" -eq 10300 ]; then
     #cat ${OUTD}/${hash_type}.sh | cut -d' ' -f11- | cut -d"'" -f2 > ${OUTD}/${hash_type}_hashes.txt
     cut -d"'" -f2 "${OUTD}/${hash_type}.sh" > "${OUTD}/${hash_type}_hashes.txt"
@@ -385,6 +391,12 @@ function init()
 
       sed 's/^echo *|.*$//'       "${cmd_file}" | awk '{print $2}'                                                                    > "${OUTD}/${hash_type}_passwords_multi_${i}.txt"
       sed 's/^echo *|/echo "" |/' "${cmd_file}" | awk '{t="";for(i=10;i<=NF;i++){if(t){t=t" "$i}else{t=$i}};print t}' | cut -d"'" -f2 > "${OUTD}/${hash_type}_hashes_multi_${i}.txt"
+
+      if [ "${hash_type}" -eq 34100 ]; then
+        mv "${OUTD}/${hash_type}_hashes_multi_${i}.txt" "${OUTD}/${hash_type}_hashes_multi_${i}.tmp"
+        cat  "${OUTD}/${hash_type}_hashes_multi_${i}.tmp" | while read f; do cat $f; done > "${OUTD}/${hash_type}_hashes_multi_${i}.txt"
+        rm  "${OUTD}/${hash_type}_hashes_multi_${i}.tmp"
+      fi
 
       if [ "${hash_type}" -eq 10300 ]; then
         #cat ${OUTD}/${hash_type}_multi_${i}.txt | cut -d' ' -f11- | cut -d"'" -f2 > ${OUTD}/${hash_type}_hashes_multi_${i}.txt
@@ -591,31 +603,45 @@ function attack_0()
       echo "${output}" >> "${OUTD}/logfull.txt"
 
       if [ "${ret}" -eq 0 ]; then
+        if   [ "${hash_type}" -ne  34100 ]; then
+          if [ "${pass_only}" -eq 1 ]; then
+            search=":${pass}"
+          else
+            search="${hash}:${pass}"
+          fi
 
-        if [ "${pass_only}" -eq 1 ]; then
-          search=":${pass}"
-        else
-          search="${hash}:${pass}"
+          echo "${output}" | grep -F "${search}" &>/dev/null
+          newRet=$? # when everything ok: $?=0
         fi
 
-        echo "${output}" | grep -F "${search}" &>/dev/null
-
-        newRet=$?
-
-        if [ "${newRet}" -eq 2 ]; then
-
+        if [[ $newRet -eq 2 || $hash_type -eq 34100 ]]; then
           # out-of-memory, workaround
 
-          echo "${output}" | grep -v "^Unsupported\|^$" | head -1 > tmp_file_out
+          if [ "${hash_type}" -eq 34100 ]; then
+            search="$(cat ${hash} | tr -d '\n'):${pass}" #hash is a filename for 34100
+            echo "${output}" | grep -E '^\$luks\$' | head -1 > tmp_file_out #cracked hash from hashcat output
+          else
+            echo "${output}" | grep -v "^Unsupported\|^$" | head -1 > tmp_file_out #cracked hash from hashcat output
+          fi
+
           echo "${search}" > tmp_file_search
 
+          # echo -e "head tmp_file_out=\t$(cat tmp_file_out | head -c80)"
+          # echo -e "head tmp_file_search=\t$(cat tmp_file_search | head -c80)"
+          # echo -e "tail tmp_file_out=\t$(cat tmp_file_out | tail -c80)"
+          # echo -e "tail tmp_file_search=\t$(cat tmp_file_search | tail -c80)"
           out_md5=$(md5sum tmp_file_out | cut -d' ' -f1)
           search_md5=$(md5sum tmp_file_search | cut -d' ' -f1)
+          # echo -e "out_md5=\t$out_md5"
+          # echo -e "search_md5=\t$search_md5"
+          # echo ""
 
           rm tmp_file_out tmp_file_search
 
           if [ "${out_md5}" == "${search_md5}" ]; then
             newRet=0
+          else
+            newRet=10
           fi
         fi
 
@@ -701,15 +727,42 @@ function attack_0()
 
         pass=$(sed -n ${i}p "${OUTD}/${hash_type}_passwords.txt")
 
-        if [ "${pass_only}" -eq 1 ]; then
-          search=":${pass}"
-        else
-          search="${hash}:${pass}"
+        if   [ "${hash_type}" -ne  34100 ]; then
+          if [ "${pass_only}" -eq 1 ]; then
+            search=":${pass}"
+          else
+            search="${hash}:${pass}"
+          fi
+
+          echo "${output}" | grep -F "${search}" &>/dev/null
+
+          newRet=$?
         fi
 
-        echo "${output}" | grep -F "${search}" &>/dev/null
+        if [ $hash_type -eq 34100 ]; then
+          search="$(echo ${hash} | tr -d '\n'):${pass}" #hash is read from file already
+          to_search_in_out="$(echo ${hash} | head -c 200)"
+          echo "${output}" | grep -F "$to_search_in_out" | head -1 > tmp_file_out #cracked hash from hashcat output
+          echo "${search}" > tmp_file_search
 
-        newRet=$?
+          # echo -e "head tmp_file_out=\t$(cat tmp_file_out | head -c80)"
+          # echo -e "head tmp_file_search=\t$(cat tmp_file_search | head -c80)"
+          # echo -e "tail tmp_file_out=\t$(cat tmp_file_out | tail -c80)"
+          # echo -e "tail tmp_file_search=\t$(cat tmp_file_search | tail -c80)"
+          out_md5=$(md5sum tmp_file_out | cut -d' ' -f1)
+          search_md5=$(md5sum tmp_file_search | cut -d' ' -f1)
+          # echo -e "out_md5=\t$out_md5"
+          # echo -e "search_md5=\t$search_md5"
+          # echo ""
+
+          rm tmp_file_out tmp_file_search
+
+          if [ "${out_md5}" == "${search_md5}" ]; then
+            newRet=0
+          else
+            newRet=10
+          fi
+        fi
 
         if [ "${newRet}" -ne 0 ]; then
           if [ "${newRet}" -eq 2 ]; then
@@ -1182,12 +1235,20 @@ function attack_3()
 
         line_dict=$(sed -n ${i}p "${dict}")
 
-        if [ "${pass_only}" -eq 1 ]; then
-          search=":${line_dict}"
-        else
-          search="${hash}:${line_dict}"
-        fi
 
+        if   [ "${hash_type}" -eq  34100 ]; then
+          if [ "${pass_only}" -eq 1 ]; then
+            search=":${line_dict}"
+          else
+            search="$(cat ${hash} | tr -d '\n'):${line_dict}" #hash is a filename for 34100
+          fi
+        else
+          if [ "${pass_only}" -eq 1 ]; then
+            search=":${line_dict}"
+          else
+            search="${hash}:${line_dict}"
+          fi
+        fi
         echo "${output}" | grep -F "${search}" &>/dev/null
 
         newRet=$?

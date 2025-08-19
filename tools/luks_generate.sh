@@ -178,5 +178,5 @@ echo "🎉 All containers created and initialized with ext4 in: $OUTPUT_DIR"
 echo "🔐 Passwords saved in: $PASSWORD_FILE"
 
 echo 'Generating hashes from .img'
-ls $OUTPUT_DIR*.img | while read f; do echo $f; tools/luks2hashcat.py $f > $f.hash
+ls $OUTPUT_DIR*.img | while read f; do echo $f; tools/luks2hashcat.py $f | grep -vE '^[0-9]+$' > $f.hash
 echo 'Done generating hashes from .img'
