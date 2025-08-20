@@ -49,7 +49,7 @@ declare -A CIPHERS=(
   ["twofish"]="twofish-xts-plain64"
 )
 
-HASHES=("sha256" "sha512" "whirlpool")
+HASHES=("sha256" ) #"sha512" "whirlpool") #only sha256 supported for luks2
 LUKS_TYPES=( "luks2") #"luks1"
 
 ARGON_KDFS=(

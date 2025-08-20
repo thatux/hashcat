@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+# TODO:
+#  1. do we need the md5 compare?
+#  2. change tools/test_modules/m34100.sh OUTPUT_DIR and MOUNT_DIR to test-folder
+#  3. support LUKS1
+#  4. support GPG
+
 ##
 ## Author......: See docs/credits.txt
 ## License.....: MIT
