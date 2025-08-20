@@ -97,3 +97,54 @@ sudo cat /mnt/info.txt
 sudo umount /mnt
 sudo cryptsetup close "notcracking"
 sudo losetup -d $loopdev
+
+password-length
+# $ grep -ri 'password not found' test_17556* | cut -d':' -f3 |  grep -F '.hash' | grep -F 'backend-vector-width 1' | cut -c2- | sort -u | cut -d' ' -f2 | tr -s '\n' | while read l; do echo -n $l | wc -m; done
+# 200
+# 64
+# 216
+# 228
+# 64
+# 80
+# 96
+# 96
+# 228
+# 80
+# 208
+# 64
+# 88
+# 80
+# # multiple of 8
+# $ grep -ri 'password not found' test_17556* | cut -d':' -f3 |  grep -F '.hash' | grep -F 'backend-vector-width 1' | cut -c2- | sort -u | cut -d' ' -f2 | tr -s '\n' | while read l; do echo -n $l | wc -m | awk '{print ($1 % 8 == 0 ? "yes" : "no")}'; done
+# yes
+# yes
+# yes
+# no
+# yes
+# yes
+# yes
+# yes
+# no
+# yes
+# yes
+# yes
+# yes
+# yes
+
+
+# only 64 character passwords
+# grep -ri 'password not found' test_1755688858/logfull.txt | rev | cut -d' ' -f1 | rev | grep -F '.hash' | sed "s/[\"']//g" | sed "s/\.hash//g" | while read f; do echo $f; cp $f* out/; done
+# grep 'password not found' test_1755688858/logfull.txt | cut -d':' -f2 |  grep -F '.hash' | cut -c2- | sort -u
+echo 1640355850315081183319867402483757181952563292963394526901208866 | ./hashcat --quiet --potfile-disable --logfile-disable -D 1 -O --runtime 400 --backend-vector-width 1 -a 0 -m 34100 'out/luks2-aes-argon2id-t4-m512-p4-size20MiB_20250820132116.img.hash'
+echo 1688846350244884461939508581391035097698783790269677429405245640 | ./hashcat --quiet --potfile-disable --logfile-disable -D 1 -O --runtime 400 --backend-vector-width 1 -a 0 -m 34100 'out/luks2-aes-argon2i-t6-m128-p4-size20MiB_20250820132121.img.hash'
+echo 2223733121952398975438583612888895864496430216586277933292979134 | ./hashcat --quiet --potfile-disable --logfile-disable -D 1 -O --runtime 400 --backend-vector-width 1 -a 0 -m 34100 'out/luks2-aes-argon2i-t4-m32-p4-size20MiB_20250820132118.img.hash'
+echo 5042121090936491978339765944290440003960408273708821249794812926 | ./hashcat --quiet --potfile-disable --logfile-disable -D 1 -O --runtime 400 --backend-vector-width 1 -a 0 -m 34100 'out/luks2-aes-argon2i-t5-m256-p1-size20MiB_20250820132118.img.hash'
+echo 6300217450703799883077352689650934077873297067106033184721636202 | ./hashcat --quiet --potfile-disable --logfile-disable -D 1 -O --runtime 400 --backend-vector-width 1 -a 0 -m 34100 'out/luks2-aes-argon2id-t4-m1024-p1-size20MiB_20250820132101.img.hash'
+echo 6598276380774162853040242189798278963283161681969013202676395144 | ./hashcat --quiet --potfile-disable --logfile-disable -D 1 -O --runtime 400 --backend-vector-width 1 -a 0 -m 34100 'out/luks2-aes-argon2i-t4-m512-p1-size20MiB_20250820132110.img.hash'
+echo 7014346312118730934667640962445912911588606368952210215436503958 | ./hashcat --quiet --potfile-disable --logfile-disable -D 1 -O --runtime 400 --backend-vector-width 1 -a 0 -m 34100 'out/luks2-aes-argon2id-t4-m128-p2-size20MiB_20250820132122.img.hash'
+echo 9546676311420297864965429421447925279947669224667114504862327818 | ./hashcat --quiet --potfile-disable --logfile-disable -D 1 -O --runtime 400 --backend-vector-width 1 -a 0 -m 34100 'out/luks2-aes-argon2id-t4-m256-p1-size20MiB_20250820132058.img.hash'
+# none of these crack.
+
+# to transform above hashcat invocation to a decrypt and mount using cryptsetup:
+# sed -E "s|^echo ([0-9]+).*'(.*)\.hash'|pw=\"\1\"\nimg=\"\2\"\nhash=\$img.hash\nloopdev=\$(sudo losetup --show -f \$img)\nsudo cryptsetup open \"\$loopdev\" \"notcracking\" <<< \"\$pw\"\nsudo mount /dev/mapper/notcracking /mnt\nsudo cat /mnt/info.txt\nsudo umount /mnt\nsudo cryptsetup close \"notcracking\"\nsudo losetup -d \$loopdev\n|" input.sh > output.sh
+# they all mount correctly

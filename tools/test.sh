@@ -384,7 +384,6 @@ function init()
       rm -rf "${cmd_file}" "${OUTD}/${hash_type}_passwords_multi_${i}.txt" "${OUTD}/${hash_type}_hashes_multi_${i}.txt"
       rm -rf "${OUTD}/${hash_type}_dict1_multi_${i}" "${OUTD}/${hash_type}_dict2_multi_${i}"
       touch "${OUTD}/${hash_type}_dict1_multi_${i}" "${OUTD}/${hash_type}_dict2_multi_${i}"
-
       if [ "${fixed_len}" -ne 0 ]; then
         if [ "${fixed_len}" -eq "${i}" ]; then
           perl tools/test.pl single "${hash_type}" ${i} > "${cmd_file}"
@@ -3980,7 +3979,8 @@ if [ "${PACKAGE}" -eq 0 ] || [ -z "${PACKAGE_FOLDER}" ]; then
           if ! is_in_array "${TMP_HT}" ${TC_MODES}; then
             if ! is_in_array "${TMP_HT}" ${VC_MODES}; then
               if ! is_in_array "${TMP_HT}" ${CL_MODES}; then
-                perl tools/test.pl single "${TMP_HT}" >> "${OUTD}/all.sh"
+                # TODO: remove 64: all passwords are now forced to be 64 characters in length
+                perl tools/test.pl single "${TMP_HT}" "64" >> "${OUTD}/all.sh"
               fi
             fi
           fi
