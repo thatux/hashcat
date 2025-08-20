@@ -15,7 +15,7 @@ ARGON_KDFS=("argon2id" "argon2i")
 
 ARGON_TIMES=(4 5 6)
 ARGON_MEMORY=(16 32 64 128 256 512 1024)
-ARGON_THREADS=(1 2 4 8)
+ARGON_THREADS=(1 2 3 4) # max is 4 https://gitlab.com/cryptsetup/cryptsetup/-/blob/main/configure.ac?ref_type=heads&utm_source=chatgpt.com#L787
 
 declare -A CIPHERS=(
   ["aes"]="aes-xts-plain64"
@@ -46,6 +46,18 @@ create_luks_container() {
 
   loopdev=$(losetup --show -f "$filename")
 
+cat >> /tmp/m34100.sh <<EOF
+cryptsetup luksFormat \
+--batch-mode \
+--type "$luks_type" \
+--cipher "$cipher" \
+--key-size 512 \
+--hash "$hash" \
+${extra_opts:+${extra_opts[@]}} \
+"$loopdev" <<< "$PASSWORD" # $filename
+EOF
+chmod +x /tmp/m34100.sh
+
   if cryptsetup luksFormat \
       --batch-mode \
       --type "$luks_type" \
@@ -55,9 +67,9 @@ create_luks_container() {
       "${extra_opts[@]}" \
       "$loopdev" <<< "$PASSWORD"; then
       true
-    # echo  "✅ Formatted: $filename"
+      echo "✅ Formatted: $filename" >> /tmp/m34100.sh
   else
-    # echo  "❌ Failed to format: $filename"
+    echo "❌ Failed to format: $filename" >> /tmp/m34100.sh
     losetup -d "$loopdev"
     rm -f "$filename"
     return
@@ -66,11 +78,19 @@ create_luks_container() {
   name="luks$(basename "$filename" | sha1sum | cut -c1-8)"
 
   if [ -e "/dev/mapper/$name" ]; then
-    # echo  "⚠️  Device $name already exists. Closing it first."
+    echo "⚠️  Device $name already exists. Closing it first." >> /tmp/m34100.sh
     cryptsetup close "$name" || true
   fi
 
-  cryptsetup open "$loopdev" "$name" <<< "$PASSWORD"
+  if cryptsetup open "$loopdev" "$name" <<< "$PASSWORD"; then
+    true
+    echo "✅ Decrypted: $filename" >> /tmp/m34100.sh
+  else
+    echo  "❌ Failed to decrypt: $filename" >> /tmp/m34100.sh
+    losetup -d "$loopdev"
+    rm -f "$filename"
+    return
+  fi
 
   mkfs.ext4 -q /dev/mapper/"$name" 2>/dev/null
 
@@ -100,7 +120,7 @@ threads=${ARGON_THREADS[$RANDOM % ${#ARGON_THREADS[@]}]}
 cipher_name=$(printf "%s\n" "${!CIPHERS[@]}" | shuf -n1)
 cipher=${CIPHERS[$cipher_name]}
 
-file="${OUTPUT_DIR}/luks2-${cipher_name}-${kdf}-t${time}-m${memory}-p${threads}-size${size}MiB_$(date +%Y%m%d%H%M%S).img"
+file="${OUTPUT_DIR}/luks2-${cipher_name}-${kdf}-t${time}-m${memory}-p${threads}-size${size}MiB_$(date +%Y%m%d%H%M%S%6N).img"
 
 # echo  "➡️  Creating $file with:"
 # echo  "   kdf=$kdf time=$time memory=$memory threads=$threads cipher=$cipher"
