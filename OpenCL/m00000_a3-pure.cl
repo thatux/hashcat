@@ -69,7 +69,7 @@ KERNEL_FQ KERNEL_FA void m00000_mxx (KERN_ATTR_VECTOR ())
   }
 }
 
-KERNEL_FQ KERNEL_FA void m00000_sxx (KERN_ATTR_VECTOR ())
+KERNEL_FQ KERNEL_FA void m00000_cutlass_sxx (KERN_ATTR_VECTOR ())
 {
   /**
    * modifier
