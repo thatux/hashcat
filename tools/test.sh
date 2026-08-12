@@ -4282,6 +4282,12 @@ OPTIONS:
 
   -g    Generate crypto-containers on-the-fly (requires sudo)
 
+  --valgrind        Run hashcat under Valgrind (requires tools/valgrind/run.py build first);
+                    findings reported via tools/valgrind/report.py --dir <sweep-dir>
+
+  --valgrind-pocl   Like --valgrind, and also runs OpenCL kernels via PoCL's CPU device
+                    so Valgrind can see inside kernel execution
+
   -h    Show this help
 
 EOF
@@ -4300,6 +4306,21 @@ HT=0
 PACKAGE=0
 OPTIMIZED=1
 GENERATE_CONTAINERS=0
+
+# getopts only understands single-char options, so --valgrind/--valgrind-pocl
+# are stripped out here before it ever sees them (it would otherwise treat
+# the leading "-" of "--valgrind" as an invalid option and bail out via usage).
+VALGRIND_MODE=0
+VALGRIND_POCL=0
+_non_valgrind_args=()
+for _arg in "$@"; do
+  case "${_arg}" in
+    --valgrind)      VALGRIND_MODE=1 ;;
+    --valgrind-pocl) VALGRIND_MODE=1; VALGRIND_POCL=1 ;;
+    *)               _non_valgrind_args+=("${_arg}") ;;
+  esac
+done
+set -- "${_non_valgrind_args[@]}"
 
 while getopts "V:t:m:a:b:hcpd:x:o:d:D:F:POI:s:fr:g" opt; do
 
@@ -4453,6 +4474,25 @@ while getopts "V:t:m:a:b:hcpd:x:o:d:D:F:POI:s:fr:g" opt; do
   esac
 
 done
+
+if [ "${VALGRIND_MODE}" -eq 1 ]; then
+  if [ ! -x "${TDIR}/../hashcat-valgrind" ]; then
+    echo "ERROR: --valgrind[-pocl] requires a debug build. Run: tools/valgrind/run.py build" >&2
+    exit 1
+  fi
+
+  VALGRIND_SWEEP_DIR="${TDIR}/../tools/valgrind/results/sweep-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "${VALGRIND_SWEEP_DIR}"
+  export VALGRIND_SWEEP_DIR
+
+  if [ "${VALGRIND_POCL}" -eq 1 ]; then
+    export VALGRIND_SWEEP_POCL=1
+  fi
+
+  BIN="tools/valgrind/sweep_shim.sh"
+
+  echo "> Valgrind sweep mode enabled (pocl=${VALGRIND_POCL}). Results: ${VALGRIND_SWEEP_DIR}"
+fi
 
 # handle Apple Silicon
 
@@ -4927,4 +4967,9 @@ if [ "${PACKAGE}" -eq 1 ]; then
     "${OUTD}/test.sh"
 
   ${PACKAGE_CMD} "${OUTD}/${OUTD}.7z" "${OUTD}/" &>/dev/null
+fi
+
+if [ "${VALGRIND_MODE}" -eq 1 ]; then
+  echo ""
+  echo "> Valgrind findings: see tools/valgrind/report.py --dir \"${VALGRIND_SWEEP_DIR}\""
 fi

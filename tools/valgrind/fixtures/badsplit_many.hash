@@ -1,0 +1,5 @@
+$B$abc12345
+$B$abc12345$tooshort
+$Babc12345$5f4dcc3b5aa765d61d8327deb882cf99
+not_a_valid_hash_at_all
+$B$$5f4dcc3b5aa765d61d8327deb882cf99

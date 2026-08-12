@@ -50,6 +50,11 @@ function usage()
   echo ""
   echo "     --skip-clean-cache             : Skip cleaning the kernel caches before starting the tests"
   echo ""
+  echo "     --valgrind                     : Run hashcat under Valgrind (requires tools/valgrind/run.py build first);"
+  echo "                                       findings reported via tools/valgrind/report.py --dir <sweep-dir>"
+  echo "     --valgrind-pocl                : Like --valgrind, and also runs OpenCL kernels via PoCL's CPU device"
+  echo "                                       so Valgrind can see inside kernel execution"
+  echo ""
   echo "-f / --force                        : run hashcat using --force"
   echo ""
   echo "-v / --verbose                      : show debug messages (supported: -v or -vv)"
@@ -128,6 +133,9 @@ BACKEND_DEVICES_KEEPFREE=0
 ALL_ATTACKS=0
 SELF_TEST_DISABLE=1
 CLEAN_CACHE_DISABLE=0
+VALGRIND_MODE=0
+VALGRIND_POCL=0
+HC_BIN="./hashcat"
 
 OPTS="--quiet --potfile-disable --machine-readable --logfile-disable"
 
@@ -186,6 +194,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-clean-cache)
       CLEAN_CACHE_DISABLE=1
+      shift
+      ;;
+    --valgrind)
+      VALGRIND_MODE=1
+      shift
+      ;;
+    --valgrind-pocl)
+      VALGRIND_MODE=1
+      VALGRIND_POCL=1
       shift
       ;;
     --vector-width-min)
@@ -549,6 +566,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [ "${VALGRIND_MODE}" -eq 1 ]; then
+  if [ ! -x "./hashcat-valgrind" ]; then
+    echo "ERROR: --valgrind[-pocl] requires a debug build. Run: tools/valgrind/run.py build" >&2
+    exit 1
+  fi
+
+  VALGRIND_SWEEP_DIR="tools/valgrind/results/sweep-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "${VALGRIND_SWEEP_DIR}"
+  export VALGRIND_SWEEP_DIR
+
+  if [ "${VALGRIND_POCL}" -eq 1 ]; then
+    export VALGRIND_SWEEP_POCL=1
+  fi
+
+  HC_BIN="tools/valgrind/sweep_shim.sh"
+
+  echo "> Valgrind sweep mode enabled (pocl=${VALGRIND_POCL}). Results: ${VALGRIND_SWEEP_DIR}"
+fi
+
 OPTS="${OPTS} --runtime ${RUNTIME_MAX}"
 
 if [[ "$HASH_TYPE" != "all" && ( "$HASH_TYPE_MIN" -ne 0 || "$HASH_TYPE_MAX" -ne 99999 ) ]]; then
@@ -626,7 +662,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
     fi
   fi
 
-  deprecated=$(./hashcat -m ${hash_type} -HH | grep "Deprecated\\.\\." | awk '{print $2}')
+  deprecated=$(${HC_BIN} -m ${hash_type} -HH | grep "Deprecated\\.\\." | awk '{print $2}')
   if [ "${deprecated}" == "Yes" ]; then
     echo "[ ${OUTD} ] > Skip processing Hash-Type ${hash_type} (is deprecated)" | tee -a ${OUTD}/test_edge.details.log
     continue
@@ -649,7 +685,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
 
   for attack_type in ${ATTACK_TYPES}; do
 
-    kernel_types=$(./hashcat -m ${hash_type} -HH | grep 'Kernel.Type(s' | cut -d: -f2 | xargs | sed -e 's/,//g')
+    kernel_types=$(${HC_BIN} -m ${hash_type} -HH | grep 'Kernel.Type(s' | cut -d: -f2 | xargs | sed -e 's/,//g')
 
     for kernel_type in ${kernel_types}; do
 
@@ -666,7 +702,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
       if [ "$KERNEL_TYPE" != "all" ] && [ $KERNEL_TYPE -ne $optimized ]; then continue; fi
 
       slow_hash=0
-      tmp_slow_hash=$(./hashcat -m ${hash_type} -HH | grep Slow\\.Hash | awk '{print $2}')
+      tmp_slow_hash=$(${HC_BIN} -m ${hash_type} -HH | grep Slow\\.Hash | awk '{print $2}')
       if [ "${tmp_slow_hash}" == "Yes" ]; then
         slow_hash=1
       fi
@@ -690,7 +726,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
         fi
       fi
 
-      tmp_salt=$(./hashcat -m ${hash_type} -HH | grep Salt\\.Type)
+      tmp_salt=$(${HC_BIN} -m ${hash_type} -HH | grep Salt\\.Type)
       have_salt=$?
 
       if [ $have_salt -eq 0 ]; then
@@ -703,7 +739,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
 
       pt_hex=0
       pt_base58=0
-      tmp_pw_type=$(./hashcat -m ${hash_type} -HH | grep Password\\.Type | awk '{print $2}')
+      tmp_pw_type=$(${HC_BIN} -m ${hash_type} -HH | grep Password\\.Type | awk '{print $2}')
       if [ "${tmp_pw_type}" == "HEX" ]; then
         pt_hex=1
       elif [ "${tmp_pw_type}" == "BASE58" ]; then
@@ -803,7 +839,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
               if [ "${attack_type}" -eq 0 ]; then
                 #echo ${word} > test_${hash_type}_${kernel_type}_${attack_type}_${i}.word
 
-                CMD="echo ${word} | ./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 0"
+                CMD="echo ${word} | ${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 0"
               elif [ "${attack_type}" -eq 1 ]; then
                 word=$(eval $x)
 
@@ -823,7 +859,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
                 echo ${word_1} > ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}.1.word
                 echo ${word_2} > ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}.2.word
 
-                CMD="./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 1 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}.1.word ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}.2.word"
+                CMD="${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 1 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}.1.word ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}.2.word"
               elif [ "${attack_type}" -eq 3 ]; then
 
                 if [ $pt_hex -eq 1 ]; then
@@ -845,7 +881,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
                   fi
                 fi
 
-                CMD="./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 3 ${word_1}${mask_1}"
+                CMD="${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 3 ${word_1}${mask_1}"
               elif [ "${attack_type}" -eq 6 ]; then
 
                 if [ $pt_hex -eq 1 ]; then
@@ -866,7 +902,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
 
                 echo -n ${word_1} > ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}_1.word
 
-                CMD="./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 6 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}_1.word ${mask_1}"
+                CMD="${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 6 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}_1.word ${mask_1}"
               elif [ "${attack_type}" -eq 7 ]; then
 
                 if [ $pt_hex -eq 1 ]; then
@@ -887,7 +923,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
 
                 echo -n ${word_1} > ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}_2.word
 
-                CMD="./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 7 ${mask_1} ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}_2.word"
+                CMD="${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash} -a 7 ${mask_1} ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}_${i}_2.word"
               fi
 
               cmd_out="${OUTD}/cmd_${hash_type}_${kernel_type}_${attack_type}_${i}.single.log"
@@ -922,7 +958,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
                   continue
                 fi
 
-                ./hashcat -m ${hash_type} -HH | grep 'Keep.Guessing.......: Yes' &> /dev/null
+                ${HC_BIN} -m ${hash_type} -HH | grep 'Keep.Guessing.......: Yes' &> /dev/null
                 if [ $? -eq 0 ]; then
                   echo "[ ${OUTD} ] > Skip output check for Hash-Type ${hash_type} (due to keep guessing)" >> ${OUTD}/test_edge.details.log
                   continue
@@ -965,7 +1001,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
           # multi hash
           if [ $TARGET_TYPE == all ] || [ $TARGET_TYPE == 1 ]; then
             cnt_max=-1
-            tmp_cnt_max=$(./hashcat -m ${hash_type} -HH | grep Hashes\\.Count\\.Max | awk '{print $2}')
+            tmp_cnt_max=$(${HC_BIN} -m ${hash_type} -HH | grep Hashes\\.Count\\.Max | awk '{print $2}')
             if [[ $tmp_cnt_max =~ ^-?[0-9]+$ ]]; then
               cnt_max=$tmp_cnt_max
             fi
@@ -986,7 +1022,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
 
             is_in_array "${hash_type}" ${SKIP_SAME_SALT_HASH_TYPES}
             if [ ${?} -eq 1 ]; then
-              multi_hashes_same_salt_allowed=$(./hashcat -m ${hash_type} -HH | grep Hashes\\.w/\\.Same\\.Salt | awk '{print $2}')
+              multi_hashes_same_salt_allowed=$(${HC_BIN} -m ${hash_type} -HH | grep Hashes\\.w/\\.Same\\.Salt | awk '{print $2}')
               if [ "${multi_hashes_same_salt_allowed}" == "Not" ]; then
                 same_salt=0
               fi
@@ -1065,7 +1101,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
 
                 echo ${word} >> ${OUTD}/edge_${hash_type}_${kernel_type}_${attack_type}.1.words
 
-                CMD="cat ${OUTD}/edge_${hash_type}_${kernel_type}_${attack_type}.1.words | ./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 0"
+                CMD="cat ${OUTD}/edge_${hash_type}_${kernel_type}_${attack_type}.1.words | ${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 0"
               elif [ "${attack_type}" -eq 1 ]; then
                 ((hash_cnt++))
 
@@ -1082,7 +1118,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
                 echo ${word_1} >> ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words
                 echo ${word_2} >> ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.2.words
 
-                CMD="./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 1 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.2.words"
+                CMD="${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 1 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.2.words"
               elif [ "${attack_type}" -eq 3 ]; then
                 ((hash_cnt++))
 
@@ -1108,7 +1144,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
                 echo -n ${word_1} >> ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words.masks
                 echo ${mask_1} >> ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words.masks
 
-                CMD="./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 3 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words.masks"
+                CMD="${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 3 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words.masks"
               elif [ "${attack_type}" -eq 6 ]; then
                 ((hash_cnt++))
 
@@ -1131,7 +1167,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
                 echo ${word_1} >> ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words
                 echo ${mask_1} >> ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.masks
 
-                CMD="./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 6 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.masks"
+                CMD="${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 6 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.words ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.1.masks"
               elif [ "${attack_type}" -eq 7 ]; then
                 ((hash_cnt++))
 
@@ -1154,7 +1190,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
                 echo ${word_1} >> ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.2.words
                 echo ${mask_1} >> ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.2.masks
 
-                CMD="./hashcat ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 7 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.2.masks ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.2.words"
+                CMD="${HC_BIN} ${CUR_OPTS_V} -m ${hash_type} ${hash_in} -a 7 ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.2.masks ${OUTD}/test_${hash_type}_${kernel_type}_${attack_type}.2.words"
               fi
             done
 
@@ -1201,7 +1237,7 @@ for hash_type in $(ls tools/test_modules/*.pm | cut -d'm' -f3 | cut -d'.' -f1 | 
                   continue
                 fi
 
-                ./hashcat -m ${hash_type} -HH | grep 'Keep.Guessing.......: Yes' &> /dev/null
+                ${HC_BIN} -m ${hash_type} -HH | grep 'Keep.Guessing.......: Yes' &> /dev/null
                 if [ $? -eq 0 ]; then
                   echo "[ ${OUTD} ] > Skip output check for Hash-Type ${hash_type} (due to keep guessing)" >> ${OUTD}/test_edge.details.log
                   continue
@@ -1251,4 +1287,8 @@ echo "[ ${OUTD} ] > All tests done in ${days}d:$(printf "%02dh:%02dm:%02ds" "$ho
 echo "[ ${OUTD} ] > Errors detected: $errors"
 if [ $errors -gt 0 ]; then
   echo "[ ${OUTD} ] !> Details on ${OUTD}/test_edge.details.log"
+fi
+
+if [ "${VALGRIND_MODE}" -eq 1 ]; then
+  echo "[ ${OUTD} ] > Valgrind findings: see tools/valgrind/report.py --dir \"${VALGRIND_SWEEP_DIR}\""
 fi

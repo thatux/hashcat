@@ -46,6 +46,19 @@ test_edge*
 Rust/feeds/*/target
 Rust/bridges/*/target
 
+# tools/valgrind/run.py build's debug copy, and every run's timestamped results dir
+/hashcat-valgrind
+/tools/valgrind/results/
+
+# compiled tools/valgrind/modules/ self-test fixtures (built via their own Makefile)
+/tools/valgrind/modules/double_free
+/tools/valgrind/modules/use_after_free
+/tools/valgrind/modules/invalid_read
+/tools/valgrind/modules/invalid_write
+/tools/valgrind/modules/leak_definite
+/tools/valgrind/modules/uninit_value
+/tools/valgrind/modules/cl_harness
+
 # Left behind by builds from before the bindings moved into OUT_DIR
 Rust/hashcat-sys/src/bindings.rs
 

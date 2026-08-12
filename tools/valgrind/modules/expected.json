@@ -1,0 +1,48 @@
+{
+  "double_free": {
+    "fixture_kind": "host",
+    "kind": "InvalidFree",
+    "relevance": "HASHCAT_HOST"
+  },
+  "use_after_free": {
+    "fixture_kind": "host",
+    "kind": "UseAfterFree",
+    "relevance": "HASHCAT_HOST"
+  },
+  "invalid_read": {
+    "fixture_kind": "host",
+    "kind": "InvalidRead",
+    "relevance": "HASHCAT_HOST"
+  },
+  "invalid_write": {
+    "fixture_kind": "host",
+    "kind": "InvalidWrite",
+    "relevance": "HASHCAT_HOST"
+  },
+  "leak_definite": {
+    "fixture_kind": "host",
+    "kind": "DefinitelyLost",
+    "relevance": "HASHCAT_HOST"
+  },
+  "uninit_value": {
+    "fixture_kind": "host",
+    "kind": "ConditionalJumpUninitialised",
+    "relevance": "HASHCAT_HOST"
+  },
+  "double_free_cl": {
+    "fixture_kind": "kernel",
+    "cl_file": "double_free.cl",
+    "kernel_name": "bad_write",
+    "kind": "ConditionalJumpUninitialised",
+    "relevance": "OPENCL_KERNEL",
+    "_note": "out-of-bounds __global writes proved empirically unreliable to detect deterministically under PoCL's pthread CPU driver in this environment (see double_free.cl comment) -- an uninitialised private variable branch is used instead, verified reliable across repeated clean-cache runs"
+  },
+  "oob_read_cl": {
+    "fixture_kind": "kernel",
+    "cl_file": "oob_read.cl",
+    "kernel_name": "bad_read",
+    "kind": "UninitialisedValue",
+    "relevance": "OPENCL_KERNEL",
+    "_note": "same rationale as double_free_cl (see oob_read.cl comment); an uninitialised value used as an array index, verified reliable across repeated clean-cache runs"
+  }
+}
