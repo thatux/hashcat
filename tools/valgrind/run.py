@@ -321,13 +321,47 @@ def cmd_exec(ns, valgrind_passthrough, hc_cmd):
         pocl_info = {"enabled": True, "device_id": device["device_id"],
                      "platform_name": device.get("platform_name")}
 
+        # Deliberately NOT injecting -d/-D here (tried first, confirmed
+        # broken empirically): hashcat numbers backend devices across all
+        # backends together, and once --backend-ignore-cuda removes CUDA's
+        # device(s) from that list, the PoCL device's number shifts -- the
+        # id find_pocl_cpu_device() detected from `-I` output no longer
+        # matches, and hashcat reports "0 devices usable" / silently skips
+        # it with no explanatory message. Omitting -d/-D entirely works
+        # reliably instead: hashcat's own backend.c auto-enables
+        # CL_DEVICE_TYPE_CPU whenever no GPU/accelerator is visible via
+        # OpenCL ("automatically enable CPU device type support, since it's
+        # disabled by default") -- exactly this case once CUDA is ignored
+        # and PoCL is the only OpenCL platform. If the caller passes their
+        # own -d/-D, that's left untouched (their choice, their risk).
         has_device_select = any(a in ("-d", "--backend-devices", "-D", "--opencl-device-types") for a in hc_cmd)
-        if not has_device_select:
-            hc_cmd = hc_cmd + ["-d", str(device["device_id"]), "-D", "1"]
-        else:
-            print("WARNING: -d/-D already present in the given command; not overriding device selection for --pocl.",
+        if has_device_select:
+            print("WARNING: -d/-D already present in the given command -- device numbering shifts once "
+                  "--backend-ignore-cuda/hip are added, so this may not select the PoCL device you expect.",
                   file=sys.stderr)
-        hc_cmd = hc_cmd + ["--backend-ignore-cuda", "--backend-ignore-hip", "--backend-ignore-metal"]
+        ignore_flags = ["--backend-ignore-cuda", "--backend-ignore-hip"]
+        if sys.platform == "darwin":
+            # --backend-ignore-metal only exists in hashcat's getopt table
+            # on macOS (src/user_options.c: #if defined (__APPLE__)) --
+            # passing it on any other platform is a hard "unrecognized
+            # option" failure, confirmed empirically.
+            ignore_flags.append("--backend-ignore-metal")
+        hc_cmd = hc_cmd + ignore_flags
+
+        # hashcat's own PoCL-version detection (src/backend.c, ~line 8362)
+        # matches the platform version string against "PoCL " (capital P/C/L)
+        # to decide whether it's new enough to use -- but PoCL's actual
+        # string is lowercase ("OpenCL 2.0 pocl 1.8 ..."), confirmed via
+        # both `clinfo` and hashcat's own `-I` output. The case-sensitive
+        # match always fails against a real PoCL install, hitting hashcat's
+        # `else { pocl_skip = true; }` fallback, which rejects the device as
+        # "Outdated PoCL OpenCL runtime detected!" regardless of its actual
+        # version. --force is hashcat's own documented escape hatch for
+        # exactly this warning ("You can use --force to override, but do
+        # not report related errors.") -- needed here purely to work around
+        # this parsing bug, not because the run is actually risky.
+        if "--force" not in hc_cmd:
+            hc_cmd = hc_cmd + ["--force"]
 
     if ns.sweep:
         if not ns.results_dir:
