@@ -53,7 +53,11 @@ function usage()
   echo "     --valgrind                     : Run hashcat under Valgrind (requires tools/valgrind/run.py build first);"
   echo "                                       findings reported via tools/valgrind/report.py --dir <sweep-dir>"
   echo "     --valgrind-pocl                : Like --valgrind, and also runs OpenCL kernels via PoCL's CPU device"
-  echo "                                       so Valgrind can see inside kernel execution"
+  echo "                                       so Valgrind can see inside kernel execution. Fast tier: no leak-check,"
+  echo "                                       no origin tracking, minimal kernel dispatch, --error-markers output."
+  echo "     --valgrind-pocl-full            : Like --valgrind-pocl, but the slow full diagnostic tier: origins"
+  echo "                                       tracking, unoptimized kernels, full XML output. Use to reproduce"
+  echo "                                       a finding from --valgrind-pocl."
   echo ""
   echo "-f / --force                        : run hashcat using --force"
   echo ""
@@ -135,6 +139,7 @@ SELF_TEST_DISABLE=1
 CLEAN_CACHE_DISABLE=0
 VALGRIND_MODE=0
 VALGRIND_POCL=0
+VALGRIND_POCL_FULL=0
 HC_BIN="./hashcat"
 
 OPTS="--quiet --potfile-disable --machine-readable --logfile-disable"
@@ -203,6 +208,12 @@ while [[ $# -gt 0 ]]; do
     --valgrind-pocl)
       VALGRIND_MODE=1
       VALGRIND_POCL=1
+      shift
+      ;;
+    --valgrind-pocl-full)
+      VALGRIND_MODE=1
+      VALGRIND_POCL=1
+      VALGRIND_POCL_FULL=1
       shift
       ;;
     --vector-width-min)
@@ -579,10 +590,13 @@ if [ "${VALGRIND_MODE}" -eq 1 ]; then
   if [ "${VALGRIND_POCL}" -eq 1 ]; then
     export VALGRIND_SWEEP_POCL=1
   fi
+  if [ "${VALGRIND_POCL_FULL}" -eq 1 ]; then
+    export VALGRIND_SWEEP_POCL_FULL=1
+  fi
 
   HC_BIN="tools/valgrind/sweep_shim.sh"
 
-  echo "> Valgrind sweep mode enabled (pocl=${VALGRIND_POCL}). Results: ${VALGRIND_SWEEP_DIR}"
+  echo "> Valgrind sweep mode enabled (pocl=${VALGRIND_POCL}, pocl_full=${VALGRIND_POCL_FULL}). Results: ${VALGRIND_SWEEP_DIR}"
 fi
 
 OPTS="${OPTS} --runtime ${RUNTIME_MAX}"

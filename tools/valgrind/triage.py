@@ -82,6 +82,134 @@ def parse_xml(xml_path):
 
 
 # ---------------------------------------------------------------------------
+# Plain-text (--error-markers) parsing -- the fast-mode alternative to XML.
+#
+# --xml=yes itself adds negligible runtime overhead (formatting only happens
+# when an error is actually found; the dominant cost is memcheck's per-access
+# shadow-memory instrumentation either way), but plain text + --error-markers
+# is simpler to reason about if a run is killed mid-write (no risk of a
+# truncated/invalid XML document) and is what fast mode uses per its design.
+#
+# Trade-off, accepted deliberately for fast mode: Valgrind's plain-text
+# format never prints <kind> (memcheck's internal enum name) or an object
+# path alongside a *resolved* (file:line) frame -- only one or the other per
+# frame. classify_frame() doesn't need both together, so classification
+# still works; but the addr2line/load-base fallback (which needs an anchor
+# frame with fn+file+line *and* obj at once) cannot run against plain-text
+# input and is silently skipped -- unresolved frames just stay unresolved.
+# Full mode (--pocl-full) uses parse_xml() and keeps that capability.
+# ---------------------------------------------------------------------------
+
+_MARKER_FRAME_RE = re.compile(
+    r"^(?:at|by)\s+(0x[0-9a-fA-F]+):\s+(.+?)\s+\("
+    r"(?:in\s+(?P<obj>[^)]+)|(?P<file>[^():]+):(?P<line>\d+))"
+    r"\)\s*$"
+)
+
+# (regex over the first "what" line, kind_raw) -- ordered, first match wins.
+# These are the exact fixed strings memcheck's own MC_(RE)?PRINTF calls use;
+# kept as regexes only for the variable size/byte-count numbers.
+_KIND_FROM_WHAT = [
+    (re.compile(r"^Invalid read of size \d+"), "InvalidRead"),
+    (re.compile(r"^Invalid write of size \d+"), "InvalidWrite"),
+    (re.compile(r"^Invalid free\(\) / delete / delete\[\] / realloc\(\)"), "InvalidFree"),
+    (re.compile(r"^Mismatched free\(\) / delete / delete \[\]"), "MismatchedFree"),
+    (re.compile(r"^Conditional jump or move depends on uninitialised value"), "UninitCondition"),
+    (re.compile(r"^Use of uninitialised value"), "UninitValue"),
+    (re.compile(r"^Syscall param .* uninitialised"), "UninitValue"),
+    (re.compile(r"^[\d,]+ bytes? in [\d,]+ blocks? are definitely lost"), "Leak_DefinitelyLost"),
+    (re.compile(r"^[\d,]+ \([\d,]+ direct, [\d,]+ indirect\) bytes? in [\d,]+ blocks? are definitely lost"), "Leak_DefinitelyLost"),
+    (re.compile(r"^[\d,]+ bytes? in [\d,]+ blocks? are indirectly lost"), "Leak_IndirectlyLost"),
+    (re.compile(r"^[\d,]+ bytes? in [\d,]+ blocks? are possibly lost"), "Leak_PossiblyLost"),
+    (re.compile(r"^[\d,]+ bytes? in [\d,]+ blocks? are still reachable"), "Leak_StillReachable"),
+]
+
+
+def infer_kind_from_what(what_text):
+    """Plain-text output never states memcheck's internal <kind> enum name
+    directly -- only the human-readable message. Recover it via the same
+    fixed strings memcheck itself prints, ordered most-specific-first."""
+    for pattern, kind_raw in _KIND_FROM_WHAT:
+        if pattern.match(what_text):
+            return kind_raw
+    return ""
+
+
+def _parse_marker_stack(lines):
+    frames = []
+    for line in lines:
+        m = _MARKER_FRAME_RE.match(line)
+        if not m:
+            continue
+        frames.append({
+            "ip": m.group(1),
+            "obj": m.group("obj"),
+            "fn": m.group(2),
+            "dir": None,
+            "file": m.group("file"),
+            "line": m.group("line"),
+        })
+    return frames
+
+
+def parse_markers_log(log_path, marker_begin="HCVG_ERR_BEGIN", marker_end="HCVG_ERR_END"):
+    """Returns the same raw error list shape as parse_xml(): a list of
+    {kind_raw, what, stacks:[{label, frames}]}. Raises OSError if log_path
+    can't be read -- callers must treat that as wrapper_rc=2, same as a
+    parse_xml() failure, not as "zero errors found"."""
+    with open(log_path, "r", errors="replace") as f:
+        text = f.read()
+
+    # Valgrind prefixes every line with "==<pid>== "; strip that uniformly
+    # before marker-splitting so the marker/frame regexes don't need to
+    # account for a variable-width pid each time.
+    prefix_re = re.compile(r"^==\d+==\s?", re.MULTILINE)
+    text = prefix_re.sub("", text)
+
+    errors = []
+    pos = 0
+    while True:
+        begin_idx = text.find(marker_begin, pos)
+        if begin_idx == -1:
+            break
+        end_idx = text.find(marker_end, begin_idx)
+        if end_idx == -1:
+            break
+        block = text[begin_idx + len(marker_begin):end_idx]
+        pos = end_idx + len(marker_end)
+
+        raw_lines = [ln.rstrip() for ln in block.split("\n")]
+        lines = [ln for ln in raw_lines if ln.strip() != ""]
+        if not lines:
+            continue
+
+        what_text = lines[0].strip()
+        kind_raw = infer_kind_from_what(what_text)
+
+        stacks = []
+        current_label = "primary"
+        current_lines = []
+        for line in lines[1:]:
+            stripped = line.strip()
+            if _MARKER_FRAME_RE.match(stripped):
+                current_lines.append(stripped)
+                continue
+            # A non-frame, non-empty line after at least one frame starts a
+            # new aux stack (e.g. "Address ... free'd", "Block was alloc'd
+            # at") -- flush whatever stack we were building first.
+            if current_lines:
+                stacks.append({"label": current_label, "frames": _parse_marker_stack(current_lines)})
+                current_lines = []
+            current_label = stripped
+        if current_lines:
+            stacks.append({"label": current_label, "frames": _parse_marker_stack(current_lines)})
+
+        errors.append({"kind_raw": kind_raw, "what": what_text, "stacks": stacks})
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
 
@@ -157,7 +285,7 @@ def resolve_cl_temp_file(file_path, repo_root):
 
 
 def classify_frame(frame, repo_root, binary_realpath, modules_dir_realpath, pocl_kernel_dirs=(),
-                    extra_relevant_realpaths=()):
+                    extra_relevant_realpaths=(), basename_index=None):
     """Three-way classification: HASHCAT_HOST / OPENCL_KERNEL / EXTERNAL_UNKNOWN / unknown.
 
     Path-prefix matching only -- never substring, never a hardcoded function
@@ -169,12 +297,22 @@ def classify_frame(frame, repo_root, binary_realpath, modules_dir_realpath, pocl
     `run.py selftest` to recognize its own ground-truth fixture files
     (which live under tools/valgrind/modules/, not the hashcat source
     tree). Real hashcat runs never pass this.
+
+    `basename_index` (see build_basename_index()) is only needed for
+    plain-text (--error-markers) frames, which never carry a <dir> --
+    file_ is a bare filename there, so it can't be joined into an absolute
+    path directly the way an XML frame's dir+file can.
     """
     file_ = frame.get("file")
     dir_ = frame.get("dir")
 
     if file_:
         abs_path = _safe_realpath(os.path.join(dir_, file_)) if dir_ else None
+
+        if abs_path is None and basename_index:
+            candidates = basename_index.get(os.path.basename(file_))
+            if candidates and len(candidates) == 1:
+                abs_path = candidates[0]
 
         if abs_path and extra_relevant_realpaths and abs_path in extra_relevant_realpaths:
             try:
@@ -363,25 +501,63 @@ def addr2line_fallback(obj_path, frame, load_base):
     return {"function": func, "file": file_, "line": line_}
 
 
+_BASENAME_INDEX_CACHE = {}
+
+
+def build_basename_index(repo_root, extra_relevant_files=()):
+    """basename -> [realpath, ...] for every file under src/, include/,
+    OpenCL/, plus any extra_relevant_files -- used to resolve plain-text
+    (--error-markers) frames, which only ever carry a bare filename, never
+    a directory. Cached per (repo_root, extra_relevant_files) since it's
+    rebuilt fresh per Resolver otherwise and the repo tree doesn't change
+    mid-run."""
+    key = (repo_root, tuple(sorted(extra_relevant_files)))
+    if key in _BASENAME_INDEX_CACHE:
+        return _BASENAME_INDEX_CACHE[key]
+
+    index = {}
+
+    def add(path):
+        rp = _safe_realpath(path)
+        if rp:
+            index.setdefault(os.path.basename(rp), []).append(rp)
+
+    for subdir in ("src", "include", "OpenCL"):
+        base = os.path.join(repo_root, subdir)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(base):
+            for name in filenames:
+                add(os.path.join(dirpath, name))
+
+    for p in extra_relevant_files:
+        add(p)
+
+    _BASENAME_INDEX_CACHE[key] = index
+    return index
+
+
 class Resolver:
     """Applies the addr2line/load-base fallback to HASHCAT_HOST/OPENCL_KERNEL
     frames Valgrind itself couldn't resolve, using an anchor frame from the
     same object that Valgrind *did* resolve. One load_base per object,
     derived once and cached."""
 
-    def __init__(self, repo_root, binary_path, modules_dir, pocl_kernel_dirs=(), extra_relevant_files=()):
+    def __init__(self, repo_root, binary_path, modules_dir, pocl_kernel_dirs=(), extra_relevant_files=(),
+                 use_basename_index=False):
         self.repo_root = repo_root
         self.binary_realpath = _safe_realpath(binary_path) if binary_path else None
         self.modules_dir_realpath = _safe_realpath(modules_dir) if modules_dir else None
         self.pocl_kernel_dirs = [d for d in (_safe_realpath(p) for p in pocl_kernel_dirs) if d]
         self.extra_relevant_realpaths = {d for d in (_safe_realpath(p) for p in extra_relevant_files) if d}
+        self.basename_index = build_basename_index(repo_root, extra_relevant_files) if use_basename_index else None
         self._load_base_cache = {}
         self._anchors_by_obj = {}
 
     def classify(self, frame):
         return classify_frame(frame, self.repo_root, self.binary_realpath,
                                self.modules_dir_realpath, self.pocl_kernel_dirs,
-                               self.extra_relevant_realpaths)
+                               self.extra_relevant_realpaths, self.basename_index)
 
     def note_anchor(self, frame):
         if frame.get("fn") and frame.get("file") and frame.get("line") and frame.get("obj"):
@@ -482,9 +658,14 @@ def error_summary(err, resolver):
     }
 
 
-def analyze(xml_path, repo_root, binary_path, modules_dir, pocl_kernel_dirs=(),
-            test_name="", timestamp="", command=None, hashcat_rc_raw=None,
-            debug_info_detected=None, pocl_info=None, extra_relevant_files=()):
+def _analyze_common(raw_errors_or_exc, repo_root, binary_path, modules_dir, pocl_kernel_dirs,
+                     test_name, timestamp, command, hashcat_rc_raw,
+                     debug_info_detected, pocl_info, extra_relevant_files, use_basename_index=False):
+    """Shared body for analyze() (XML) and analyze_markers() (plain-text):
+    everything from "raw errors already parsed" onward is format-agnostic.
+    `raw_errors_or_exc` is either the parsed list, or an Exception instance
+    if parsing itself failed (so both entry points report a parse failure
+    identically instead of duplicating that branch)."""
     result = {
         "schema_version": SCHEMA_VERSION,
         "run": {
@@ -496,7 +677,7 @@ def analyze(xml_path, repo_root, binary_path, modules_dir, pocl_kernel_dirs=(),
             "debug_info_detected": debug_info_detected,
         },
         "valgrind": {
-            "xml_parse_ok": False,
+            "parse_ok": False,
             "total_errors": 0,
             "host_errors": 0,
             "kernel_errors": 0,
@@ -515,21 +696,17 @@ def analyze(xml_path, repo_root, binary_path, modules_dir, pocl_kernel_dirs=(),
         result["run"]["hashcat_rc_signed"] = signed
         result["run"]["hashcat_rc_meaning"] = meaning
 
-    try:
-        raw_errors = parse_xml(xml_path)
-    except (ET.ParseError, OSError) as e:
+    if isinstance(raw_errors_or_exc, BaseException):
         result["run"]["wrapper_rc"] = 2
         result["run"]["wrapper_status"] = "wrapper_failure"
-        result["valgrind"]["parse_error"] = str(e)
+        result["valgrind"]["parse_error"] = str(raw_errors_or_exc)
         return result
 
-    result["valgrind"]["xml_parse_ok"] = True
+    result["valgrind"]["parse_ok"] = True
 
-    resolver = Resolver(repo_root, binary_path, modules_dir, pocl_kernel_dirs, extra_relevant_files)
-    errors_out = []
-    for err in raw_errors:
-        summary = error_summary(err, resolver)
-        errors_out.append(summary)
+    resolver = Resolver(repo_root, binary_path, modules_dir, pocl_kernel_dirs, extra_relevant_files,
+                         use_basename_index=use_basename_index)
+    errors_out = [error_summary(err, resolver) for err in raw_errors_or_exc]
 
     # relevant-first ordering
     errors_out.sort(key=lambda e: 0 if e["relevance"] in RELEVANT else 1)
@@ -556,6 +733,34 @@ def analyze(xml_path, repo_root, binary_path, modules_dir, pocl_kernel_dirs=(),
         result["run"]["wrapper_status"] = "clean"
 
     return result
+
+
+def analyze(xml_path, repo_root, binary_path, modules_dir, pocl_kernel_dirs=(),
+            test_name="", timestamp="", command=None, hashcat_rc_raw=None,
+            debug_info_detected=None, pocl_info=None, extra_relevant_files=()):
+    """Full-mode entry point: parses Valgrind's --xml=yes output."""
+    try:
+        raw_errors_or_exc = parse_xml(xml_path)
+    except (ET.ParseError, OSError) as e:
+        raw_errors_or_exc = e
+    return _analyze_common(raw_errors_or_exc, repo_root, binary_path, modules_dir, pocl_kernel_dirs,
+                            test_name, timestamp, command, hashcat_rc_raw,
+                            debug_info_detected, pocl_info, extra_relevant_files)
+
+
+def analyze_markers(log_path, repo_root, binary_path, modules_dir, pocl_kernel_dirs=(),
+                     test_name="", timestamp="", command=None, hashcat_rc_raw=None,
+                     debug_info_detected=None, pocl_info=None, extra_relevant_files=()):
+    """Fast-mode entry point: parses Valgrind's plain-text --error-markers
+    output instead of XML. See parse_markers_log()'s docstring for the
+    capability trade-off (no addr2line/load-base fallback in this mode)."""
+    try:
+        raw_errors_or_exc = parse_markers_log(log_path)
+    except OSError as e:
+        raw_errors_or_exc = e
+    return _analyze_common(raw_errors_or_exc, repo_root, binary_path, modules_dir, pocl_kernel_dirs,
+                            test_name, timestamp, command, hashcat_rc_raw,
+                            debug_info_detected, pocl_info, extra_relevant_files, use_basename_index=True)
 
 
 # ---------------------------------------------------------------------------

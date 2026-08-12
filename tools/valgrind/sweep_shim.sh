@@ -8,7 +8,8 @@
 ## results into the sweep's own results directory.
 ##
 ## Required env: VALGRIND_SWEEP_DIR (results directory for this sweep run)
-## Optional env: VALGRIND_SWEEP_POCL=1 (adds --pocl)
+## Optional env: VALGRIND_SWEEP_POCL=1 (adds --pocl, fast tier)
+##              VALGRIND_SWEEP_POCL_FULL=1 (adds --pocl-full instead, slow diagnostic tier)
 ##
 
 set -u
@@ -24,7 +25,9 @@ fi
 SLUG="t$(date +%s%N)-$$"
 
 POCL_FLAG=()
-if [ "${VALGRIND_SWEEP_POCL:-0}" = "1" ]; then
+if [ "${VALGRIND_SWEEP_POCL_FULL:-0}" = "1" ]; then
+  POCL_FLAG=(--pocl-full)
+elif [ "${VALGRIND_SWEEP_POCL:-0}" = "1" ]; then
   POCL_FLAG=(--pocl)
 fi
 

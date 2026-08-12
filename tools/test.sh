@@ -4286,7 +4286,13 @@ OPTIONS:
                     findings reported via tools/valgrind/report.py --dir <sweep-dir>
 
   --valgrind-pocl   Like --valgrind, and also runs OpenCL kernels via PoCL's CPU device
-                    so Valgrind can see inside kernel execution
+                    so Valgrind can see inside kernel execution. Fast tier: no leak-check,
+                    no origin tracking, minimal kernel dispatch (-M -n 1 -u 1 -T 1
+                    --backend-vector-width 1), plain-text --error-markers output.
+
+  --valgrind-pocl-full   Like --valgrind-pocl, but the slow full diagnostic tier:
+                    --track-origins=yes, unoptimized (-cl-opt-disable) kernels, full XML
+                    output. Use to reproduce/diagnose a finding from --valgrind-pocl.
 
   -h    Show this help
 
@@ -4312,12 +4318,14 @@ GENERATE_CONTAINERS=0
 # the leading "-" of "--valgrind" as an invalid option and bail out via usage).
 VALGRIND_MODE=0
 VALGRIND_POCL=0
+VALGRIND_POCL_FULL=0
 _non_valgrind_args=()
 for _arg in "$@"; do
   case "${_arg}" in
-    --valgrind)      VALGRIND_MODE=1 ;;
-    --valgrind-pocl) VALGRIND_MODE=1; VALGRIND_POCL=1 ;;
-    *)               _non_valgrind_args+=("${_arg}") ;;
+    --valgrind)           VALGRIND_MODE=1 ;;
+    --valgrind-pocl)      VALGRIND_MODE=1; VALGRIND_POCL=1 ;;
+    --valgrind-pocl-full) VALGRIND_MODE=1; VALGRIND_POCL=1; VALGRIND_POCL_FULL=1 ;;
+    *)                    _non_valgrind_args+=("${_arg}") ;;
   esac
 done
 set -- "${_non_valgrind_args[@]}"
@@ -4488,10 +4496,13 @@ if [ "${VALGRIND_MODE}" -eq 1 ]; then
   if [ "${VALGRIND_POCL}" -eq 1 ]; then
     export VALGRIND_SWEEP_POCL=1
   fi
+  if [ "${VALGRIND_POCL_FULL}" -eq 1 ]; then
+    export VALGRIND_SWEEP_POCL_FULL=1
+  fi
 
   BIN="tools/valgrind/sweep_shim.sh"
 
-  echo "> Valgrind sweep mode enabled (pocl=${VALGRIND_POCL}). Results: ${VALGRIND_SWEEP_DIR}"
+  echo "> Valgrind sweep mode enabled (pocl=${VALGRIND_POCL}, pocl_full=${VALGRIND_POCL_FULL}). Results: ${VALGRIND_SWEEP_DIR}"
 fi
 
 # handle Apple Silicon

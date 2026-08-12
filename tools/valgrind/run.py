@@ -296,14 +296,28 @@ def cmd_exec(ns, valgrind_passthrough, hc_cmd):
         print("Source-level Valgrind output will be degraded to object/offset only.", file=sys.stderr)
         print("For source-level output run: tools/valgrind/run.py build", file=sys.stderr)
 
+    pocl_enabled = ns.pocl or ns.pocl_full
+    fast_mode = pocl_enabled and not ns.pocl_full
+
     env = dict(os.environ)
     pocl_info = None
-    if ns.pocl:
+    if pocl_enabled:
         # POCL_DEVICES takes a PoCL *driver* name (e.g. "pthread"), not a device
         # type string -- confirmed empirically: "cpu" is not a valid driver name
         # and silently makes clGetDeviceIDs() return zero devices (CL_DEVICE_NOT_FOUND).
         env["POCL_DEVICES"] = "pthread"
-        env["POCL_EXTRA_BUILD_FLAGS"] = "-g -cl-opt-disable"
+        # One compute unit regardless of mode: PoCL's pthread driver otherwise
+        # spins up a worker per host CPU, and under Valgrind those threads
+        # are serialized anyway (Memcheck's global lock means no real
+        # parallelism), so extra CUs are pure scheduling overhead with zero
+        # detection benefit in either mode.
+        env["POCL_CPU_MAX_CU_COUNT"] = "1"
+        # -cl-opt-disable keeps kernel code mapped closely to source for deep
+        # debugging, at the cost of running slower under Valgrind on top of
+        # Valgrind's own overhead. Fast mode accepts optimized (but still
+        # -g debug-labelled) kernels to trade some line-precision for speed;
+        # full mode keeps -cl-opt-disable for maximum fidelity.
+        env["POCL_EXTRA_BUILD_FLAGS"] = "-g" if fast_mode else "-g -cl-opt-disable"
         env["POCL_LEAVE_KERNEL_COMPILER_TEMP_FILES"] = "1"
         if ns.pocl_enable_uninit:
             env["POCL_ENABLE_UNINIT"] = "1"
@@ -363,6 +377,28 @@ def cmd_exec(ns, valgrind_passthrough, hc_cmd):
         if "--force" not in hc_cmd:
             hc_cmd = hc_cmd + ["--force"]
 
+        if fast_mode:
+            # Fast mode trades exhaustive coverage for speed: one kernel
+            # instance, one thread, no vectorization -- still exercises the
+            # same kernel source/code path, just without amplifying
+            # Valgrind's per-instruction overhead across a real workload.
+            # Warn (don't silently override) if the caller already chose
+            # their own values, same pattern as the -d/-D check above.
+            minimal_flags = {"-M": [], "-n": ["1"], "-u": ["1"], "-T": ["1"],
+                              "--backend-vector-width": ["1"]}
+            has_workload_flags = any(
+                a in ("-M", "--multiply-accel-disable", "-n", "--kernel-accel",
+                      "-u", "--kernel-loops", "-T", "--kernel-threads",
+                      "--backend-vector-width")
+                for a in hc_cmd
+            )
+            if has_workload_flags:
+                print("WARNING: kernel-dispatch flags already present in the given command -- "
+                      "--pocl fast mode normally forces -M -n 1 -u 1 -T 1 --backend-vector-width 1 "
+                      "for speed; leaving your flags as-is.", file=sys.stderr)
+            else:
+                hc_cmd = hc_cmd + ["-M", "-n", "1", "-u", "1", "-T", "1", "--backend-vector-width", "1"]
+
     if ns.sweep:
         if not ns.results_dir:
             print("ERROR: --sweep requires --results-dir", file=sys.stderr)
@@ -379,12 +415,41 @@ def cmd_exec(ns, valgrind_passthrough, hc_cmd):
     xml_path = run_dir / "valgrind.xml"
     log_path = run_dir / "valgrind.log"
 
-    vg_cmd = [
-        "valgrind", "--tool=memcheck",
-        "--leak-check=full", "--show-leak-kinds=definite", "--errors-for-leak-kinds=definite",
-        "--num-callers=40", "--read-inline-info=yes",
-        "--xml=yes", f"--xml-file={xml_path}", f"--log-file={log_path}",
-    ]
+    if fast_mode:
+        # Fast tier: no XML (Valgrind's XML writer is itself non-trivial
+        # overhead), no leak checking, no origin tracking -- just
+        # invalid-access/uninitialized-value detection via plain-text
+        # --error-markers, parsed by triage.parse_markers_log(). Deep
+        # diagnostics (leak checking, origins, full call stacks) are what
+        # --pocl-full and plain --valgrind are for.
+        vg_cmd = [
+            "valgrind", "--tool=memcheck",
+            "--leak-check=no", "--track-origins=no",
+            "--num-callers=40", "--read-inline-info=yes",
+            f"--log-file={log_path}",
+            "--error-markers=HCVG_ERR_BEGIN,HCVG_ERR_END",
+        ]
+        if ns.undef_value_errors_no:
+            # Optional even-faster tier: skips uninitialized-value tracking
+            # entirely (Memcheck's most expensive check). Opt-in only --
+            # this defeats one of Memcheck's two primary jobs, so it must
+            # never be a default.
+            vg_cmd.append("--undef-value-errors=no")
+    else:
+        # Full diagnostic tier -- used by both --pocl-full and plain
+        # --valgrind (host-only leak checking). --pocl-full additionally
+        # wants --track-origins=yes per spec; plain --valgrind keeps its
+        # original behavior (origins stay an explicit passthrough opt-in,
+        # since it roughly doubles overhead and host-only runs are usually
+        # fast enough that this used to be a deliberate per-invocation choice).
+        vg_cmd = [
+            "valgrind", "--tool=memcheck",
+            "--leak-check=full", "--show-leak-kinds=definite", "--errors-for-leak-kinds=definite",
+            "--num-callers=40", "--read-inline-info=yes",
+            "--xml=yes", f"--xml-file={xml_path}", f"--log-file={log_path}",
+        ]
+        if ns.pocl_full:
+            vg_cmd.append("--track-origins=yes")
     supp = SCRIPT_DIR / "hashcat.supp"
     if supp.exists():
         vg_cmd.append(f"--suppressions={supp}")
@@ -408,12 +473,20 @@ def cmd_exec(ns, valgrind_passthrough, hc_cmd):
     hashcat_rc_raw = (128 - rc) if rc < 0 else rc
 
     modules_dir = REPO_ROOT / "modules"
-    summary = triage.analyze(
-        str(xml_path), str(REPO_ROOT), hc_bin_resolved, str(modules_dir),
-        pocl_kernel_dirs=(), test_name=ns.test_name, timestamp=ts,
-        command=hc_cmd, hashcat_rc_raw=hashcat_rc_raw,
-        debug_info_detected=debug_ok, pocl_info=pocl_info,
-    )
+    if fast_mode:
+        summary = triage.analyze_markers(
+            str(log_path), str(REPO_ROOT), hc_bin_resolved, str(modules_dir),
+            pocl_kernel_dirs=(), test_name=ns.test_name, timestamp=ts,
+            command=hc_cmd, hashcat_rc_raw=hashcat_rc_raw,
+            debug_info_detected=debug_ok, pocl_info=pocl_info,
+        )
+    else:
+        summary = triage.analyze(
+            str(xml_path), str(REPO_ROOT), hc_bin_resolved, str(modules_dir),
+            pocl_kernel_dirs=(), test_name=ns.test_name, timestamp=ts,
+            command=hc_cmd, hashcat_rc_raw=hashcat_rc_raw,
+            debug_info_detected=debug_ok, pocl_info=pocl_info,
+        )
     text = triage.write_summary(run_dir, summary)
 
     if ns.sweep:
@@ -527,7 +600,7 @@ def _run_selftest_case(name, hc_cmd, results_dir, extra_relevant_files=()):
     )
     triage.write_summary(run_dir, summary)
 
-    if not summary["valgrind"]["xml_parse_ok"]:
+    if not summary["valgrind"]["parse_ok"]:
         return False, None, None, "xml parse failed"
 
     # analyze() already sorts errors relevant-first, so the first entry with
@@ -561,9 +634,17 @@ def build_exec_parser():
     p = argparse.ArgumentParser(prog="run.py exec", add_help=True,
                                  description="Run one hashcat command under Valgrind with triage.")
     p.add_argument("test_name")
-    p.add_argument("--pocl", action="store_true", help="run OpenCL kernels via PoCL CPU device")
+    p.add_argument("--pocl", action="store_true",
+                    help="run OpenCL kernels via PoCL CPU device, fast tier: no leak-check, no "
+                         "origins, minimal kernel dispatch, plain-text --error-markers output")
+    p.add_argument("--pocl-full", action="store_true",
+                    help="run OpenCL kernels via PoCL CPU device, full diagnostic tier: "
+                         "--track-origins=yes, unoptimized (-cl-opt-disable) kernels, full XML output")
     p.add_argument("--pocl-enable-uninit", action="store_true",
                     help="set POCL_ENABLE_UNINIT=1 (platform-dependent, opt-in)")
+    p.add_argument("--undef-value-errors-no", action="store_true",
+                    help="fast --pocl tier only: pass --undef-value-errors=no for an even faster, "
+                         "address-only run (skips uninitialized-value tracking entirely)")
     p.add_argument("--sweep", action="store_true",
                     help="non-interactive mode for test.sh/test_edge.sh: hashcat's stdout/stderr/exit-code "
                          "pass through untouched; requires --results-dir")

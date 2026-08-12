@@ -8,6 +8,19 @@ Valgrind log. It can also run hashcat's OpenCL kernels through a CPU-side
 OpenCL implementation (PoCL) so Valgrind can see inside kernel execution,
 which it otherwise cannot do for anything that runs on a real GPU.
 
+**Honest performance assessment, after tuning `--pocl` for speed (see the
+fast/full split below)**: even the fast tier is still slow enough that it is
+practical only for a single, small, targeted repro — a handful of candidates
+against one hash, not a real wordlist or a sweep across many modes. In
+practice a real KDF-heavy mode against a ~100K-word dictionary still took
+12+ CPU-minutes under `--pocl` in this environment; running several `--pocl`
+invocations concurrently also hit PoCL device-detection contention (`-I`
+queries racing) rather than actually scaling wall-clock time down. Use it to
+confirm/diagnose one specific finding on one specific candidate, not as a
+routine CI-style regression gate — for that, a native (non-Valgrind) crash
+reproduction, or a real GPU vendor sanitizer, will get you an answer in
+seconds instead of minutes.
+
 ## Why debug info is required
 
 hashcat's default release build strips symbols and omits frame pointers, so
@@ -80,7 +93,7 @@ are actually in place rather than finding out from a failed run.
 ## `run.py exec` — run one command
 
 ```
-tools/valgrind/run.py exec <test-name> [--pocl] [valgrind-opts...] -- <hashcat-command...>
+tools/valgrind/run.py exec <test-name> [--pocl | --pocl-full] [--undef-value-errors-no] [valgrind-opts...] -- <hashcat-command...>
 ```
 
 Examples (matching the two fixtures under `fixtures/`):
@@ -133,25 +146,25 @@ investigate, not as this tool's own verification target (that's what
   wrapper/build/parse failure.
 - Every run gets its own timestamped `tools/valgrind/results/<timestamp>-<test-name>/`
   directory (never overwritten) with `command.txt`, `environment.txt`,
-  `valgrind.xml`, `valgrind.log`, `summary.txt`, `summary.json`.
+  `valgrind.log`, `summary.txt`, `summary.json`, plus `valgrind.xml` (full
+  tier only — fast `--pocl` mode has no XML file, just the plain-text log).
 - Re-running the same `<test-name>` is safe and expected — repeated runs
   each get their own directory.
 
-### PoCL kernel mode (`--pocl`)
+### PoCL kernel mode: `--pocl` (fast) vs `--pocl-full` (deep diagnostic)
 
 ```
-tools/valgrind/run.py exec kernel-check --pocl -- ./hashcat-valgrind -m <mode> ...
+tools/valgrind/run.py exec kernel-check --pocl      -- ./hashcat-valgrind -m <mode> ...
+tools/valgrind/run.py exec kernel-check --pocl-full -- ./hashcat-valgrind -m <mode> ...
 ```
 
 Valgrind instruments the CPU process it wraps. A GPU kernel dispatched to a
 real GPU runs entirely outside that process — no flag changes that. PoCL is
-a CPU-only OpenCL implementation: with `--pocl`, `run.py exec` forces
+a CPU-only OpenCL implementation: both `--pocl` and `--pocl-full` force
 hashcat onto PoCL's CPU device (`--backend-ignore-cuda --backend-ignore-hip
---backend-ignore-metal`, plus `-d`/`-D` for the detected PoCL device — never
-a hardcoded device index) and sets the PoCL environment variables needed for
-kernel-level debug info (`POCL_EXTRA_BUILD_FLAGS="-g -cl-opt-disable"`,
-`POCL_LEAVE_KERNEL_COMPILER_TEMP_FILES=1`). If no PoCL CPU device is found,
-it fails clearly rather than silently falling back to a GPU backend:
+--backend-ignore-metal`, relying on hashcat's own CPU auto-fallback rather
+than a hardcoded device index). If no PoCL CPU device is found, the run
+fails clearly rather than silently falling back to a GPU backend:
 
 ```
 ERROR: --pocl requested, but no PoCL CPU OpenCL device was found.
@@ -162,6 +175,50 @@ Check:
 
 Install PoCL first: `sudo apt-get install pocl-opencl-icd clinfo` (not done
 automatically by any of these tools).
+
+The two modes exist because Valgrind+PoCL overhead compounds badly on
+anything slow to begin with (GPG's S2K key-stretching modes, for example,
+took 18+ minutes for a single small run under the old always-maximal
+settings). **`--pocl` is the routine, fast tier** — use it for everyday
+regression runs, including sweeps. **`--pocl-full` is the slow, deep
+diagnostic tier** — reach for it only to get maximal detail reproducing a
+finding `--pocl` already flagged.
+
+| | `--pocl` (fast) | `--pocl-full` (deep) |
+|---|---|---|
+| Leak checking | off (`--leak-check=no`) | full |
+| Origin tracking | off (`--track-origins=no`) | on (`--track-origins=yes`) |
+| Kernel build flags | `POCL_EXTRA_BUILD_FLAGS="-g"` (optimized, still labelled) | `"-g -cl-opt-disable"` (unoptimized, line-precise) |
+| PoCL compute units | `POCL_CPU_MAX_CU_COUNT=1` (both — Valgrind serializes threads anyway) | same |
+| hashcat dispatch | forced minimal: `-M -n 1 -u 1 -T 1 --backend-vector-width 1` | whatever the caller passed |
+| Output format | plain-text `--error-markers`, parsed by `triage.parse_markers_log()` | `--xml=yes`, parsed by `triage.parse_xml()` |
+| `--num-callers` | 40 | 40 |
+
+**Fast-mode caveat on stack resolution**: Valgrind's plain-text
+`--error-markers` output never reports a frame's `<dir>` together with its
+`<file>:<line>` the way XML does — only a bare filename. `triage.py` closes
+this gap with a basename index built from every file under `src/`,
+`include/`, and `OpenCL/`, so a uniquely-named source file still classifies
+correctly; a same-named file that exists in more than one of those
+directories would not resolve unambiguously in fast mode (not observed in
+practice, since hashcat's source filenames are unique). If a fast-mode
+finding needs that ambiguity resolved, or needs the extra call-stack
+precision that unoptimized kernels give, rerun the same command with
+`--pocl-full`.
+
+**Optional even-faster tier**: `--undef-value-errors-no` (only meaningful
+alongside `--pocl`) additionally passes `--undef-value-errors=no`, skipping
+Memcheck's uninitialized-value tracking entirely — address-only checking.
+This is opt-in, never a default, since it defeats one of Memcheck's two
+primary jobs (finding reads of uninitialized memory, which is most of what
+`--pocl` mode exists to catch in kernels). Reach for it only when you
+specifically want invalid-access checking alone, as fast as this tool gets.
+
+**`--valgrind` (no `--pocl`/`--pocl-full`) stays the host-only tier**, XML
+output, full leak checking, unchanged from before this split — origins
+tracking is still an explicit passthrough opt-in there (`--track-origins=yes`),
+not a default, since host-only runs are usually fast enough that this stays
+a deliberate per-invocation choice.
 
 **Known limitation, confirmed empirically**: PoCL copies kernel source into
 a randomly-named temp file under `~/.cache/pocl/kcache/` before compiling
@@ -233,13 +290,15 @@ A missing or malformed `summary.json` shows up as a flagged row (`?` /
 
 ## Running from `tools/test.sh` / `tools/test_edge.sh`
 
-Both existing regression sweeps accept `--valgrind` and `--valgrind-pocl`,
-reusing their existing hash-mode/attack-mode/vector-width test generation
-instead of a parallel test suite:
+Both existing regression sweeps accept `--valgrind`, `--valgrind-pocl`
+(fast), and `--valgrind-pocl-full` (deep diagnostic), reusing their existing
+hash-mode/attack-mode/vector-width test generation instead of a parallel
+test suite:
 
 ```
 tools/test_edge.sh -m 3711 -a 3 -V 1 --valgrind
 tools/test_edge.sh -m 3711 --valgrind-pocl
+tools/test_edge.sh -m 17010 --valgrind-pocl-full
 tools/test.sh --valgrind
 ```
 
@@ -257,11 +316,14 @@ directory instead, printed as a pointer at the end of the run:
 ```
 
 **Performance note**: Valgrind's overhead is commonly 10-50x, and
-`--valgrind-pocl` adds PoCL's own CPU kernel compilation/execution on top of
-that. An unscoped `--valgrind[-pocl]` sweep across hashcat's 600+ modes
-could run for a very long time. Use the existing scoping flags
-(`test_edge.sh`'s `-m`/`-a`/`-V`/`--hash-type-min`/`--hash-type-max`, etc.)
-to bound a run — that's the intended normal workflow, not an unscoped sweep.
+`--valgrind-pocl[-full]` adds PoCL's own CPU kernel compilation/execution on
+top of that — `--valgrind-pocl` (fast tier) keeps this as low as this tool
+gets; reach for `--valgrind-pocl-full` only when reproducing a specific
+finding, not for routine sweeps. An unscoped sweep across hashcat's 600+
+modes could still run for a very long time even in fast mode. Use the
+existing scoping flags (`test_edge.sh`'s `-m`/`-a`/`-V`/`--hash-type-min`/
+`--hash-type-max`, etc.) to bound a run — that's the intended normal
+workflow, not an unscoped sweep.
 
 ## `hashcat.supp`
 
@@ -277,7 +339,7 @@ external.
 ```
 tools/valgrind/
 ├── run.py          # CLI: build / check / exec / selftest
-├── triage.py        # XML parsing, classification, addr2line + PoCL content-hash fallback, JSON schema
+├── triage.py        # XML + plain-text (--error-markers) parsing, classification, addr2line + PoCL content-hash fallback, JSON schema
 ├── report.py         # aggregates past runs into a table
 ├── sweep_shim.sh      # BIN indirection target for test.sh/test_edge.sh --valgrind[-pocl]
 ├── hashcat.supp        # empty by default
