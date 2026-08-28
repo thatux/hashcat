@@ -1112,7 +1112,7 @@ void generate_cached_kernel_filename (const bool slow_candidates, const u32 atta
         else if (attack_kern == ATTACK_KERN_COMBI)
           snprintf (cached_file, 255, "%s/kernels/m%05d_a1-pure.%s.%s", cache_dir, (int) kern_type, device_name_chksum, (is_metal == true) ? "metallib" : "kernel");
         else if (attack_kern == ATTACK_KERN_BF)
-          snprintf (cached_file, 255, "%s/kernels/m%05d_a3-pure.%s.%s", cache_dir, (int) kern_type, device_name_chksum, (is_metal == true) ? "metallib" : "kernel");
+          snprintf (cached_file, 255, "%s/kernels/m%05d_cutlass_a3-pure.%s.%s", cache_dir, (int) kern_type, device_name_chksum, (is_metal == true) ? "metallib" : "kernel");
         else if (attack_kern == ATTACK_KERN_NONE)
           snprintf (cached_file, 255, "%s/kernels/m%05d_a0-pure.%s.%s", cache_dir, (int) kern_type, device_name_chksum, (is_metal == true) ? "metallib" : "kernel");
       }
@@ -12397,7 +12397,7 @@ static int backend_session_setup_cuda_kernel_types (hashcat_ctx_t *hashcat_ctx, 
       }
       else
       {
-        snprintf (kernel_name, sizeof (kernel_name), "m%05u_sxx", kern_type);
+        snprintf (kernel_name, sizeof (kernel_name), "m%05u_cutlass_sxx", kern_type);
 
         if (hc_cuModuleGetFunction (hashcat_ctx, &device_param->cuda_function4, device_param->cuda_module, kernel_name) == -1)
         {
@@ -13091,7 +13091,7 @@ static int backend_session_setup_hip_kernel_types (hashcat_ctx_t *hashcat_ctx, h
       }
       else
       {
-        snprintf (kernel_name, sizeof (kernel_name), "m%05u_sxx", kern_type);
+        snprintf (kernel_name, sizeof (kernel_name), "m%05u_cutlass_sxx", kern_type);
 
         if (hc_hipModuleGetFunction (hashcat_ctx, &device_param->hip_function4, device_param->hip_module, kernel_name) == -1)
         {
@@ -13786,9 +13786,9 @@ static int backend_session_setup_metal_kernel_types (hashcat_ctx_t *hashcat_ctx,
       }
       else
       {
-        // kernel4: m%05u_sxx
+        // kernel4: m%05u_cutlass_sxx
 
-        snprintf (kernel_name, sizeof (kernel_name), "m%05u_sxx", kern_type);
+        snprintf (kernel_name, sizeof (kernel_name), "m%05u_cutlass_sxx", kern_type);
 
         if (hc_mtlCreateKernel (hashcat_ctx, device_param->metal_device, device_param->metal_library, kernel_name, &device_param->metal_function4, &device_param->metal_pipeline4) == -1)
         {
@@ -14462,7 +14462,7 @@ static int backend_session_setup_opencl_kernel_types (hashcat_ctx_t *hashcat_ctx
       }
       else
       {
-        snprintf (kernel_name, sizeof (kernel_name), "m%05u_sxx", kern_type);
+        snprintf (kernel_name, sizeof (kernel_name), "m%05u_cutlass_sxx", kern_type);
 
         if (hc_clCreateKernel (hashcat_ctx, device_param->opencl_program, kernel_name, &device_param->opencl_kernel4) == -1)
         {
