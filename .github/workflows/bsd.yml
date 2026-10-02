@@ -46,7 +46,7 @@ jobs:
             os_name: DragonflyBSD
 
     name: Build ${{ matrix.os_name }} (${{ matrix.shared == 0 && 'Static' || 'Shared' }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v4
 
