@@ -14200,6 +14200,32 @@ int backend_session_begin (hashcat_ctx_t *hashcat_ctx)
       vector_width = 1;
     }
 
+    // UTF-8 to UTF-16 is a variable length conversion, so the password length after it is not
+    // known in advance and differs between the lanes. hc_enc_next() decodes one candidate at a
+    // time and has no vector form, so the vectorized conversions in inc_hash_*.cl widen the bytes
+    // instead, which turns a multi byte character into the wrong one and never matches. The scalar
+    // path is the only one that gets a non ASCII password right, so these modes run at width 1.
+    // This holds whatever the user asked for, so it stays out of the backend_vector_width_chgd
+    // block above: the mode simply cannot produce a correct result above width 1.
+    //
+    // Only the pure kernels do the conversion themselves. An optimized kernel widens at any width
+    // and cannot crack a multi byte password either way, so there is nothing to pin. opts_type
+    // cannot answer this because interface.c clears OPTS_TYPE_PT_UTF16LE and OPTS_TYPE_PT_UTF16BE
+    // when the optimized kernel is not used, so ask the module.
+
+    if ((hashconfig->opti_type & OPTI_TYPE_OPTIMIZED_KERNEL) == 0)
+    {
+      if (module_ctx->module_opts_type != MODULE_DEFAULT)
+      {
+        const u64 module_opts_type = module_ctx->module_opts_type (hashconfig, user_options, user_options_extra);
+
+        if (module_opts_type & (OPTS_TYPE_PT_UTF16LE | OPTS_TYPE_PT_UTF16BE))
+        {
+          vector_width = 1;
+        }
+      }
+    }
+
     if (vector_width > 16) vector_width = 16;
 
     device_param->vector_width = vector_width;
