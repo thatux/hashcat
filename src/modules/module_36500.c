@@ -29,7 +29,8 @@ static const char *ST_PASS = "hashcat";
 static const char *HASH_NAME = "NTLM(NTLM_bin($pass))";
 static const u64 KERN_TYPE = 36500;
 static const u64 OPTS_TYPE = OPTS_TYPE_STOCK_MODULE
-                           | OPTS_TYPE_PT_GENERATE_LE;
+                           | OPTS_TYPE_PT_GENERATE_LE
+                           | OPTS_TYPE_PT_UTF16LE;
 static const char *ST_HASH = "7f30a0c84b2a806d93c39cea3b760716";  // NTLM(NTLM_bin("hashcat"))
 
 
