@@ -673,15 +673,19 @@ def main():
     if not pool:
         sys.exit("no vast.ai offers match the filter; raise --max-dph, lower --min-cpu-cores, "
                  "or clear --gpu-name")
-    if len(pool) < len(bins):
-        # Fewer hosts than instances asked for: run as many shards as there are
-        # hosts, which also leaves no spares for the bad-host retry.
-        print(f"only {len(pool)} host(s) match; using {len(pool)} instance(s)", flush=True)
-        bins = balance(tasks, len(pool), ci_matrix.mode_weight)
+    # Decide how many shards to run: at most what was asked and at most the hosts
+    # we have, but always leave some offers as spares so a dead or rejected host
+    # can be replaced. With no spares, one unreplaceable host fails the whole run.
+    shards = min(args.instances, len(pool))
+    if shards >= len(pool) and len(pool) >= 4:
+        shards = len(pool) - max(1, len(pool) // 5)  # reserve about a fifth, at least one
+    if shards != len(bins):
+        bins = balance(tasks, shards, ci_matrix.mode_weight)
         scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout, args.max_load_per_cpu)
                    for i, b in enumerate(bins)]
-    print(f"{len(pool)} candidate host(s) (>= {args.min_cpu_cores} cpu) for {len(bins)} instance(s), "
-          f"each rejecting hosts over {args.max_load_per_cpu}x load per cpu", flush=True)
+    print(f"{len(pool)} candidate host(s) (>= {args.min_cpu_cores} cpu): {len(bins)} instance(s) "
+          f"plus {len(pool) - len(bins)} spare(s), rejecting hosts over "
+          f"{args.max_load_per_cpu}x load per cpu", flush=True)
 
     # A thread-safe source of offers: each shard takes the next cheapest unused
     # host, so no two shards share a host and a rejected host is replaced from the
