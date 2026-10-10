@@ -169,10 +169,11 @@ def repo_url_and_ref(args):
     return url, ref
 
 
-def remote_script(repo_url, ref, bin_tasks, sn):
+def remote_script(repo_url, ref, bin_tasks, sn, mode_timeout):
     """The whole job for one box: set up, fetch the commit under test, build, and
     run test.py for each of this box's tasks, OR-ing the per-task exit codes. sn
-    is the box's short name, which tags its groups and error annotations."""
+    is the box's short name, which tags its groups and error annotations;
+    mode_timeout caps a single mode's test.py run."""
     modes = {m for m, _ in bin_tasks}
     fetch = []
     if modes & LUKS1_MODES:
@@ -193,6 +194,7 @@ def remote_script(repo_url, ref, bin_tasks, sn):
 
     return TEMPLATE.format(
         sn=sn,
+        mode_timeout=mode_timeout,
         repo_url=repo_url,
         ref=ref,
         fetch="\n".join(fetch),
@@ -249,12 +251,15 @@ run_one () {{
   m="$1"; shift
   echo "::group::[$SN] test.py -m $m $* -D 2"
   out=$(mktemp)
-  if python3 tools/test.py -m "$m" "$@" -D 2 -f >"$out" 2>&1; then rc=0; else rc=$?; fi
+  # Cap each mode so one that hangs (a wedged host, a stuck kernel build) fails
+  # this mode rather than running until the workflow's own timeout.
+  if timeout -k 30 {mode_timeout} python3 tools/test.py -m "$m" "$@" -D 2 -f >"$out" 2>&1; then rc=0; else rc=$?; fi
   cat "$out"
   echo "::endgroup::"
   if [ "$rc" -ne 0 ]; then
     fail=1
     reason=$(grep -m1 -E '> (Error|Fault|Compare Error) :|oracle failed|did not round trip' "$out" | sed 's/^[[:space:]]*//' || true)
+    if [ "$rc" -eq 124 ]; then reason="timed out after {mode_timeout}s"; fi
     echo "::error title=[$SN] test.py failed on mode $m (rc $rc)::${{reason:-see the attack log above}}"
   fi
   rm -f "$out"
@@ -362,9 +367,9 @@ def offer_query(args):
     }
 
 
-def pick_offers(offers, count, gpu_name):
-    """The cheapest distinct hosts matching the GPU filter, one per host so a run
-    does not pile several boxes onto one machine."""
+def offer_pool(offers, gpu_name):
+    """All matching offers, one per host, cheapest first, as a pool the shards
+    pull from, so a shard whose host turns out to be bad can take the next one."""
     out, seen = [], set()
     for o in offers:
         if gpu_name and gpu_name.lower() != "any" and gpu_name.lower() not in o["gpu_name"].lower():
@@ -374,8 +379,6 @@ def pick_offers(offers, count, gpu_name):
             continue
         seen.add(host)
         out.append(o)
-        if len(out) >= count:
-            break
     return out
 
 
@@ -404,36 +407,86 @@ def ssh_ok(host, port, key_path):
     return r.returncode == 0
 
 
-def run_shard(vast, offer, bin_tasks, script, key_path, pub_key, args, result):
-    """Rent one box, run its script over SSH, record the outcome, destroy the box."""
-    name = f"s{result['idx']}"
-    instance_id = None
-    log_path = Path(args.logdir) / f"{name}.log"
+def probe_host(host, port, key_path):
+    """A quick health read of a freshly booted box: the host's one minute load,
+    its CPU count and whether a GPU is visible. vast.ai boxes share a physical
+    host, so one already slammed by other tenants (a load many times the CPU
+    count) starves the CPU bound kernel build and must be avoided. Returns a dict
+    or None when the box cannot even answer."""
+    cmd = ('read l1 rest < /proc/loadavg; '
+           'echo "$l1 $(nproc) $(nvidia-smi -L 2>/dev/null | grep -c GPU)"')
     try:
-        instance_id = vast.create(offer["id"], args.image, args.disk, INSTANCE_LABEL_PREFIX + name)
-        result["instance"] = instance_id
-        print(f"[{name}] rented instance {instance_id} on {offer['gpu_name']} "
-              f"(${offer['dph_total']:.3f}/h, {offer.get('geolocation')})", flush=True)
-        vast.attach_ssh(instance_id, pub_key)
-        host, port = wait_ssh(vast, instance_id, key_path, time.time() + args.boot_timeout)
-        print(f"[{name}] up at {host}:{port}, running {len(bin_tasks)} tasks", flush=True)
-        with open(log_path, "w") as log:
-            proc = subprocess.run(
-                ["ssh", "-i", key_path, "-p", str(port), *SSH_OPTS, f"root@{host}", "bash -s"],
-                input=script, stdout=log, stderr=subprocess.STDOUT, text=True)
-        result["rc"] = proc.returncode
-    except Exception as exc:  # a shard that cannot run is a failed shard
-        result["rc"] = 1
-        result["error"] = str(exc)
-        print(f"[{name}] error: {exc}", flush=True)
-    finally:
-        if instance_id is not None and not args.keep:
-            if vast.destroy(instance_id):
-                print(f"[{name}] destroyed instance {instance_id}", flush=True)
-            else:
-                print(f"[{name}] WARNING: could not destroy instance {instance_id}, "
-                      f"the cleanup step should catch it", flush=True)
+        r = subprocess.run(["ssh", "-i", key_path, "-p", str(port), *SSH_OPTS,
+                            f"root@{host}", cmd], capture_output=True, text=True, timeout=40)
+    except subprocess.TimeoutExpired:
+        return None
+    parts = r.stdout.split()
+    if r.returncode != 0 or len(parts) < 3:
+        return None
+    try:
+        return {"load1": float(parts[0]), "ncpu": int(parts[1]), "gpus": int(parts[2])}
+    except ValueError:
+        return None
+
+
+def run_shard(vast, get_offer, bin_tasks, script, key_path, pub_key, args, result):
+    """Rent a healthy box, run its script over SSH, record the outcome, destroy the
+    box. A host that is unreachable, has no GPU, or is too loaded is destroyed and
+    the next offer tried, up to args.max_attempts, so a bad shared host does not
+    sink the shard."""
+    name = f"s{result['idx']}"
+    log_path = Path(args.logdir) / f"{name}.log"
     result["log"] = str(log_path)
+
+    for attempt in range(1, args.max_attempts + 1):
+        offer = get_offer()
+        if offer is None:
+            result.setdefault("rc", 1)
+            result.setdefault("error", "ran out of offers to try")
+            print(f"[{name}] no more offers to try", flush=True)
+            return
+        instance_id = None
+        try:
+            instance_id = vast.create(offer["id"], args.image, args.disk, INSTANCE_LABEL_PREFIX + name)
+            result["instance"] = instance_id
+            print(f"[{name}] attempt {attempt}: rented {instance_id} on {offer['gpu_name']} "
+                  f"(${offer['dph_total']:.3f}/h, {offer.get('geolocation')})", flush=True)
+            vast.attach_ssh(instance_id, pub_key)
+            host, port = wait_ssh(vast, instance_id, key_path, time.time() + args.boot_timeout)
+
+            health = probe_host(host, port, key_path)
+            if health is None or health["gpus"] < 1 \
+                    or health["load1"] > args.max_load_per_cpu * health["ncpu"]:
+                why = ("unreachable" if health is None
+                       else "no GPU visible" if health["gpus"] < 1
+                       else f"host load {health['load1']:.0f} on {health['ncpu']} cpus")
+                print(f"[{name}] rejecting host ({why}), trying another offer", flush=True)
+                continue  # the finally destroys this instance
+
+            print(f"[{name}] up at {host}:{port} "
+                  f"(load {health['load1']:.1f}/{health['ncpu']} cpu, {health['gpus']} gpu), "
+                  f"running {len(bin_tasks)} tasks", flush=True)
+            with open(log_path, "w") as log:
+                proc = subprocess.run(
+                    ["ssh", "-i", key_path, "-p", str(port), *SSH_OPTS, f"root@{host}", "bash -s"],
+                    input=script, stdout=log, stderr=subprocess.STDOUT, text=True)
+            result["rc"] = proc.returncode
+            return
+        except Exception as exc:  # boot or ssh trouble: try the next offer
+            result["error"] = str(exc)
+            print(f"[{name}] attempt {attempt} error: {exc}", flush=True)
+        finally:
+            if instance_id is not None and not args.keep:
+                if vast.destroy(instance_id):
+                    print(f"[{name}] destroyed instance {instance_id}", flush=True)
+                else:
+                    print(f"[{name}] WARNING: could not destroy instance {instance_id}, "
+                          f"the cleanup step should catch it", flush=True)
+            result["instance"] = None
+
+    result.setdefault("rc", 1)
+    result.setdefault("error", f"no healthy host in {args.max_attempts} attempts")
+    print(f"[{name}] gave up after {args.max_attempts} attempts", flush=True)
 
 
 def cleanup_all(vast):
@@ -469,6 +522,12 @@ def main():
                         "minimum host driver CUDA the offer search requires")
     p.add_argument("--disk", type=int, default=24, help="instance disk in GB")
     p.add_argument("--boot-timeout", type=int, default=900, help="seconds to wait for SSH")
+    p.add_argument("--max-load-per-cpu", type=float, default=4.0,
+                   help="reject a freshly booted host whose one minute load exceeds this times its CPU count")
+    p.add_argument("--max-attempts", type=int, default=3,
+                   help="how many offers a shard may try before giving up")
+    p.add_argument("--mode-timeout", type=int, default=1800,
+                   help="seconds a single mode's test.py may run before it is killed")
     p.add_argument("--repo-url", default=None, help="clone URL under test (default: this CI repo)")
     p.add_argument("--ref", default=None, help="commit or branch under test (default: this CI commit)")
     p.add_argument("--keep", action="store_true", help="do not destroy the boxes (for debugging)")
@@ -503,7 +562,8 @@ def main():
     print(f"{len(tasks)} tasks ({'+'.join(kinds)}) in {len(bins)} instances "
           f"of {args.gpu_name or 'any'} from {repo_url}@{ref}", flush=True)
 
-    scripts = [remote_script(repo_url, ref, b, f"s{i}") for i, b in enumerate(bins)]
+    scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout)
+               for i, b in enumerate(bins)]
 
     # --check and --dry-run both run every step up to here (parse the options and
     # the environment, load ci_matrix, plan and balance the tasks, build each
@@ -526,15 +586,32 @@ def main():
         sys.exit("no VAST_API_KEY in the environment")
     vast = Vast(api_key)
 
-    offers = vast.offers(offer_query(args))
-    picked = pick_offers(offers, len(bins), args.gpu_name)
-    if len(picked) < len(bins):
-        print(f"only {len(picked)} offers match (wanted {len(bins)}); "
-              f"running the cheapest shards that fit", flush=True)
-        bins = bins[:len(picked)]
-        scripts = scripts[:len(picked)]
-    if not picked:
+    pool = offer_pool(vast.offers(offer_query(args)), args.gpu_name)
+    if not pool:
         sys.exit("no vast.ai offers match the filter; raise --max-dph or clear --gpu-name")
+    if len(pool) < len(bins):
+        # Fewer hosts than instances asked for: run as many shards as there are
+        # hosts, which also leaves no spares for the bad-host retry.
+        print(f"only {len(pool)} host(s) match; using {len(pool)} instance(s)", flush=True)
+        bins = balance(tasks, len(pool), ci_matrix.mode_weight)
+        scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout)
+                   for i, b in enumerate(bins)]
+    print(f"{len(pool)} candidate host(s) for {len(bins)} instance(s), "
+          f"each rejecting hosts over {args.max_load_per_cpu}x load per cpu", flush=True)
+
+    # A thread-safe source of offers: each shard takes the next cheapest unused
+    # host, so no two shards share a host and a rejected host is replaced from the
+    # same pool rather than reused.
+    offer_lock = threading.Lock()
+    offer_next = [0]
+
+    def get_offer():
+        with offer_lock:
+            if offer_next[0] >= len(pool):
+                return None
+            o = pool[offer_next[0]]
+            offer_next[0] += 1
+            return o
 
     if args.logdir:
         os.makedirs(args.logdir, exist_ok=True)
@@ -547,9 +624,9 @@ def main():
 
         results = [{"idx": i} for i in range(len(bins))]
         threads = []
-        for i, (offer, b, s, res) in enumerate(zip(picked, bins, scripts, results)):
+        for b, s, res in zip(bins, scripts, results):
             t = threading.Thread(target=run_shard,
-                                 args=(vast, offer, b, s, key_path, pub_key, args, res))
+                                 args=(vast, get_offer, b, s, key_path, pub_key, args, res))
             t.start()
             threads.append(t)
             time.sleep(2)  # stagger the create calls a little

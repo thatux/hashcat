@@ -10,6 +10,8 @@ A rented box has the host's NVIDIA driver (so `libcuda`), but the CUDA toolkit t
 
 Each box builds once and runs a balanced group of modes, so a handful of GPUs cover every mode in parallel rather than one box running them all in series.
 
+vast.ai boxes share a physical host, so right after a box boots the launcher checks its load and that a GPU is visible; a host already slammed by other tenants (its load far above its CPU count) is destroyed and the next cheapest offer is rented in its place. Each mode also runs under a timeout, so a single wedged mode fails that mode rather than running until the workflow's limit.
+
 ## Setup
 
 One secret, set once under **Settings -> Secrets and variables -> Actions**:
