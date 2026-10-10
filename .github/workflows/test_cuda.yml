@@ -118,4 +118,29 @@ jobs:
           # misconfiguration fails here for free instead of after a GPU is billed.
           python ci/vast/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES" --check
 
-          python ci/vast/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES"
+          python ci/vast/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES" --logdir cuda-logs
+
+      - name: Upload the per-instance logs
+        if: always() && steps.freshness.outputs.run != 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cuda-test-logs
+          path: cuda-logs/
+          if-no-files-found: ignore
+
+  # A safety net: the launcher destroys its boxes itself, but if the job above is
+  # cancelled or times out before it can, this always-run job destroys whatever is
+  # still labeled as ours so nothing keeps billing.
+  cleanup:
+    needs: cuda
+    if: always() && (github.event_name != 'schedule' || github.repository == 'hashcat/hashcat')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Destroy any leftover instances
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python ci/vast/weekly_gpu.py --cleanup

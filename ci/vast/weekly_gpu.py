@@ -43,7 +43,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-VAST_API = "https://console.vast.ai/api/v0"
+VAST_HOST = "https://console.vast.ai"
+VAST_API = VAST_HOST + "/api/v0"
+
+# Every instance this launcher rents carries this label, so the cleanup pass can
+# find and destroy leftovers without touching instances rented for anything else.
+INSTANCE_LABEL_PREFIX = "hashcat-cuda-"
 
 
 def env_default(key, default):
@@ -204,7 +209,15 @@ git fetch -q --depth 1 origin {ref}
 git checkout -q FETCH_HEAD
 echo "testing $(git rev-parse HEAD)"
 make -j"$(nproc)"
-python3 -m pip install -q --break-system-packages -r tools/requirements.txt
+# New pip on an externally managed image (Ubuntu 24.04) needs --break-system-packages;
+# old pip (Ubuntu 22.04) does not know the flag and does not need it. Use it only when
+# this pip supports it, so the install works on either base image.
+if python3 -m pip install --help 2>/dev/null | grep -q -- --break-system-packages; then
+  PIPFLAGS="--break-system-packages"
+else
+  PIPFLAGS=""
+fi
+python3 -m pip install -q $PIPFLAGS -r tools/requirements.txt
 # hashcat dlopens libnvrtc at run time; the toolkit image keeps it here, and the
 # host provides libcuda on the GPU.
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${{LD_LIBRARY_PATH:-}}"
@@ -263,9 +276,26 @@ class Vast:
     def show(self, instance_id):
         return json.loads(self._cli("show", "instance", str(instance_id)))
 
+    def _rest(self, method, path):
+        req = urllib.request.Request(VAST_HOST + path, method=method,
+                                     headers={"Authorization": f"Bearer {self.api_key}"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.load(r)
+
+    def list_instances(self):
+        # The v0 list endpoint is deprecated and answers with an error object, so
+        # read the v1 one. Returns every instance on the account.
+        return self._rest("GET", "/api/v1/instances/").get("instances", [])
+
     def destroy(self, instance_id):
-        subprocess.run(["vastai", "destroy", "instance", str(instance_id),
-                        "--api-key", self.api_key], capture_output=True, text=True)
+        # Delete over REST and report whether it worked. The vastai CLI destroy
+        # did nothing in CI (it left the instances billing), while the v0 delete
+        # endpoint returns {"success": true} and actually tears the instance down.
+        try:
+            return bool(self._rest("DELETE", f"/api/v0/instances/{instance_id}/").get("success"))
+        except Exception as exc:
+            print(f"destroy {instance_id} failed: {exc}", flush=True)
+            return False
 
 
 def image_cuda_version(image):
@@ -357,7 +387,7 @@ def run_shard(vast, offer, bin_tasks, script, key_path, pub_key, args, result):
     instance_id = None
     log_path = Path(args.logdir) / f"{name}.log"
     try:
-        instance_id = vast.create(offer["id"], args.image, args.disk, f"hashcat-cuda-{name}")
+        instance_id = vast.create(offer["id"], args.image, args.disk, INSTANCE_LABEL_PREFIX + name)
         result["instance"] = instance_id
         print(f"[{name}] rented instance {instance_id} on {offer['gpu_name']} "
               f"(${offer['dph_total']:.3f}/h, {offer.get('geolocation')})", flush=True)
@@ -375,9 +405,26 @@ def run_shard(vast, offer, bin_tasks, script, key_path, pub_key, args, result):
         print(f"[{name}] error: {exc}", flush=True)
     finally:
         if instance_id is not None and not args.keep:
-            vast.destroy(instance_id)
-            print(f"[{name}] destroyed instance {instance_id}", flush=True)
+            if vast.destroy(instance_id):
+                print(f"[{name}] destroyed instance {instance_id}", flush=True)
+            else:
+                print(f"[{name}] WARNING: could not destroy instance {instance_id}, "
+                      f"the cleanup step should catch it", flush=True)
     result["log"] = str(log_path)
+
+
+def cleanup_all(vast):
+    """Destroy every instance this workflow labeled that is still up, so a main run
+    killed before its own teardown (a timeout or a cancel) does not keep billing."""
+    mine = [i for i in vast.list_instances()
+            if str(i.get("label", "")).startswith(INSTANCE_LABEL_PREFIX)]
+    print(f"cleanup: {len(mine)} leftover instance(s)")
+    failed = 0
+    for i in mine:
+        ok = vast.destroy(i["id"])
+        print(f"  {'destroyed' if ok else 'FAILED to destroy'} {i['id']} ({i.get('label')})")
+        failed += 0 if ok else 1
+    return 1 if failed else 0
 
 
 def main():
@@ -405,7 +452,17 @@ def main():
     p.add_argument("--dry-run", action="store_true", help="print the plan and scripts, rent nothing")
     p.add_argument("--check", action="store_true",
                    help="validate the options, environment and plan, print a summary, rent nothing")
+    p.add_argument("--cleanup", action="store_true",
+                   help="destroy every leftover instance this workflow labeled, then exit")
+    p.add_argument("--logdir", default=None,
+                   help="directory for the per-instance logs (default: a temporary directory)")
     args = p.parse_args()
+
+    if args.cleanup:
+        api_key = os.environ.get("VAST_API_KEY")
+        if not api_key:
+            sys.exit("no VAST_API_KEY in the environment")
+        return cleanup_all(Vast(api_key))
 
     kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
     bad = [k for k in kinds if k not in KIND_OPTS]
@@ -456,7 +513,10 @@ def main():
     if not picked:
         sys.exit("no vast.ai offers match the filter; raise --max-dph or clear --gpu-name")
 
-    args.logdir = tempfile.mkdtemp(prefix="cuda-ci-")
+    if args.logdir:
+        os.makedirs(args.logdir, exist_ok=True)
+    else:
+        args.logdir = tempfile.mkdtemp(prefix="cuda-ci-")
     with tempfile.TemporaryDirectory() as keydir:
         key_path = os.path.join(keydir, "id_ed25519")
         subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", key_path], check=True)
