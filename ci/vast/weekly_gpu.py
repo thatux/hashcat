@@ -430,6 +430,46 @@ def ssh_ok(host, port, key_path):
     return r.returncode == 0
 
 
+def ssh_run(host, port, key_path, remote_cmd, input_text=None, timeout=60):
+    return subprocess.run(["ssh", "-i", key_path, "-p", str(port), *SSH_OPTS,
+                           f"root@{host}", remote_cmd],
+                          input=input_text, capture_output=True, text=True, timeout=timeout)
+
+
+def run_detached(host, port, key_path, script, log_path, deadline, poll=15):
+    """Run the box script detached from the SSH session and poll for it to finish.
+
+    The script is written to the box, launched under setsid so it keeps running if
+    the SSH connection drops, and teed to run.log with its exit code in run.rc.
+    The launcher then polls run.rc over short lived connections, tolerating a
+    dropped poll, and pulls run.log when it appears. Returns the exit code, or None
+    if the deadline passes first. This survives the SSH drops that would otherwise
+    kill a job running as a child of a single long lived connection."""
+    ssh_run(host, port, key_path, "cat > /root/run.sh", input_text=script)
+    ssh_run(host, port, key_path,
+            "rm -f /root/run.rc; "
+            "setsid sh -c 'bash /root/run.sh > /root/run.log 2>&1; echo $? > /root/run.rc' "
+            "</dev/null >/dev/null 2>&1 &")
+    while time.time() < deadline:
+        time.sleep(poll)
+        try:
+            r = ssh_run(host, port, key_path, "cat /root/run.rc 2>/dev/null", timeout=40)
+        except subprocess.TimeoutExpired:
+            continue  # a dropped poll is fine, the job keeps running on the box
+        rc_text = r.stdout.strip()
+        if rc_text:
+            try:
+                Path(log_path).write_text(ssh_run(host, port, key_path, "cat /root/run.log",
+                                                  timeout=180).stdout)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            try:
+                return int(rc_text)
+            except ValueError:
+                return 1
+    return None
+
+
 def probe_host(host, port, key_path):
     """A quick health read of a freshly booted box: the host's one minute load,
     its CPU count and whether a GPU is visible. vast.ai boxes share a physical
@@ -489,17 +529,20 @@ def run_shard(vast, get_offer, bin_tasks, script, key_path, pub_key, args, resul
             print(f"[{name}] up at {host}:{port} "
                   f"(load {health['load1']:.1f}/{health['ncpu']} cpu, {health['gpus']} gpu), "
                   f"running {len(bin_tasks)} tasks", flush=True)
-            with open(log_path, "w") as log:
-                proc = subprocess.run(
-                    ["ssh", "-i", key_path, "-p", str(port), *SSH_OPTS, f"root@{host}", "bash -s"],
-                    input=script, stdout=log, stderr=subprocess.STDOUT, text=True)
-            if proc.returncode == REJECT_CODE:
+            rc = run_detached(host, port, key_path, script, log_path,
+                              time.time() + args.run_timeout)
+            if rc is None:
+                # The box ran past the deadline without finishing, which on a shared
+                # host usually means it is too slow to be worth waiting on; drop it.
+                print(f"[{name}] no result in {args.run_timeout}s, trying another offer", flush=True)
+                continue
+            if rc == REJECT_CODE:
                 # The box's own pre-attack check found it unfit (no CUDA device or
                 # it got loaded during the build); drop it and try another offer.
                 print(f"[{name}] host dropped itself before the attacks, trying another offer",
                       flush=True)
                 continue
-            result["rc"] = proc.returncode
+            result["rc"] = rc
             return
         except Exception as exc:  # boot or ssh trouble: try the next offer
             result["error"] = str(exc)
@@ -551,6 +594,8 @@ def main():
                         "minimum host driver CUDA the offer search requires")
     p.add_argument("--disk", type=int, default=24, help="instance disk in GB")
     p.add_argument("--boot-timeout", type=int, default=900, help="seconds to wait for SSH")
+    p.add_argument("--run-timeout", type=int, default=10800,
+                   help="seconds to wait for a box to finish its tasks before dropping it")
     p.add_argument("--max-load-per-cpu", type=float, default=4.0,
                    help="reject a freshly booted host whose one minute load exceeds this times its CPU count")
     p.add_argument("--max-attempts", type=int, default=3,
