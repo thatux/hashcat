@@ -55,6 +55,10 @@ INSTANCE_LABEL_PREFIX = "hashcat-cuda-"
 # The box script below prints the same literal, so keep the two in step.
 MARKER = "__HC_CONSOLE_BEGIN__"
 
+# Exit code the box script uses to say "this host is bad, drop it and try another"
+# rather than "a test failed". run_shard turns it into a retry on the next offer.
+REJECT_CODE = 77
+
 
 def env_default(key, default):
     """An environment variable, treating unset and empty the same. GitHub passes
@@ -169,11 +173,13 @@ def repo_url_and_ref(args):
     return url, ref
 
 
-def remote_script(repo_url, ref, bin_tasks, sn, mode_timeout):
+def remote_script(repo_url, ref, bin_tasks, sn, mode_timeout, max_load):
     """The whole job for one box: set up, fetch the commit under test, build, and
     run test.py for each of this box's tasks, OR-ing the per-task exit codes. sn
     is the box's short name, which tags its groups and error annotations;
-    mode_timeout caps a single mode's test.py run."""
+    mode_timeout caps a single mode's test.py run; max_load is the pre-attack
+    load-per-cpu ceiling above which the box drops itself for the launcher to
+    replace."""
     modes = {m for m, _ in bin_tasks}
     fetch = []
     if modes & LUKS1_MODES:
@@ -195,6 +201,8 @@ def remote_script(repo_url, ref, bin_tasks, sn, mode_timeout):
     return TEMPLATE.format(
         sn=sn,
         mode_timeout=mode_timeout,
+        max_load=max_load,
+        reject_code=REJECT_CODE,
         repo_url=repo_url,
         ref=ref,
         fetch="\n".join(fetch),
@@ -243,8 +251,23 @@ echo "::endgroup::"
 echo "__HC_CONSOLE_BEGIN__"
 
 echo "::group::[$SN] backend info"
-./hashcat -I || true
+hcinfo=$(./hashcat -I 2>&1 || true)
+printf '%s\n' "$hcinfo"
 echo "::endgroup::"
+
+# A quick check before the real attacks: the CUDA backend must actually see a GPU
+# here, and the host must still be sane after the build. If either fails, exit with
+# the reject code so the launcher drops this host and tries another, rather than
+# letting every mode hang or error on a box that cannot run them.
+if ! printf '%s' "$hcinfo" | grep -qiE 'CUDA[. ]?Info|Backend Device ID'; then
+  echo "::error title=[$SN] CUDA backend unusable, dropping host::hashcat -I listed no device"
+  exit {reject_code}
+fi
+read l1 rest < /proc/loadavg
+if [ "$(awk -v l="$l1" -v n="$(nproc)" 'BEGIN {{ print (l > {max_load} * n) ? 1 : 0 }}')" = "1" ]; then
+  echo "::error title=[$SN] host overloaded, dropping host::load $l1 on $(nproc) cpus before tests"
+  exit {reject_code}
+fi
 
 fail=0
 run_one () {{
@@ -470,6 +493,12 @@ def run_shard(vast, get_offer, bin_tasks, script, key_path, pub_key, args, resul
                 proc = subprocess.run(
                     ["ssh", "-i", key_path, "-p", str(port), *SSH_OPTS, f"root@{host}", "bash -s"],
                     input=script, stdout=log, stderr=subprocess.STDOUT, text=True)
+            if proc.returncode == REJECT_CODE:
+                # The box's own pre-attack check found it unfit (no CUDA device or
+                # it got loaded during the build); drop it and try another offer.
+                print(f"[{name}] host dropped itself before the attacks, trying another offer",
+                      flush=True)
+                continue
             result["rc"] = proc.returncode
             return
         except Exception as exc:  # boot or ssh trouble: try the next offer
@@ -562,7 +591,7 @@ def main():
     print(f"{len(tasks)} tasks ({'+'.join(kinds)}) in {len(bins)} instances "
           f"of {args.gpu_name or 'any'} from {repo_url}@{ref}", flush=True)
 
-    scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout)
+    scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout, args.max_load_per_cpu)
                for i, b in enumerate(bins)]
 
     # --check and --dry-run both run every step up to here (parse the options and
@@ -594,7 +623,7 @@ def main():
         # hosts, which also leaves no spares for the bad-host retry.
         print(f"only {len(pool)} host(s) match; using {len(pool)} instance(s)", flush=True)
         bins = balance(tasks, len(pool), ci_matrix.mode_weight)
-        scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout)
+        scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout, args.max_load_per_cpu)
                    for i, b in enumerate(bins)]
     print(f"{len(pool)} candidate host(s) for {len(bins)} instance(s), "
           f"each rejecting hosts over {args.max_load_per_cpu}x load per cpu", flush=True)
