@@ -56,11 +56,27 @@ DECLSPEC void pcfg_hash_setup (MAYBE_UNUSED PRIVATE_AS pcfg_hash_ctx_t *hc, MAYB
 
 DECLSPEC bool pcfg_hash (PRIVATE_AS const pcfg_hash_ctx_t *hc, PRIVATE_AS u32 *w, const u32 len, PRIVATE_AS u32 *dgst)
 {
+  u32 r[16];
+
+  // This gate assumes the password is read wide, as a full 64 word copy, exactly when
+  // RECIPE_PASS_PLAIN is not set. The wide read is RECIPE_XRUN, which a recipe runs only to
+  // transform the password, plus the HMAC key path; RECIPE_PASS_PLAIN marks the recipes that do
+  // neither, so where it is set the recipe reads only the candidate's own bytes.
+
+#ifdef RECIPE_PASS_PLAIN
+
+  // The recipe hashes the password as is, reading only its own bytes, which the candidate array
+  // holds. Evaluate it in place, no copy.
+
+  recipe_eval (&hc->st, w, w, len, hc->s, hc->salt_len, r);
+
+#else
+
   // The pcfg candidate array holds the candidate zero padded only as far as the generator needs,
-  // which can be fewer than 64 words. A recipe like pad(pass, 100) reads past the candidate, so it
-  // would read whatever is left in the array beyond it. Copy the candidate into a buffer cleared to
-  // the full 256 bytes the recipe may reach, the same way the global path does, so the bytes past
-  // the candidate are zero.
+  // which can be fewer than 64 words. A recipe that transforms the password reads it as a full 64
+  // word copy, past the candidate, so it would read whatever is left in the array beyond it. Copy
+  // the candidate into a buffer cleared to the full 256 bytes the recipe may reach, the same way
+  // the global path does, so the bytes past the candidate are zero.
 
   u32 pw[64];
 
@@ -73,9 +89,9 @@ DECLSPEC bool pcfg_hash (PRIVATE_AS const pcfg_hash_ctx_t *hc, PRIVATE_AS u32 *w
     pw[idx] = w[idx];
   }
 
-  u32 r[16];
-
   recipe_eval (&hc->st, pw, pw, pw_len, hc->s, hc->salt_len, r);
+
+#endif
 
   dgst[0] = r[DGST_R0];
   dgst[1] = r[DGST_R1];
