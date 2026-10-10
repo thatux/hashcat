@@ -560,7 +560,7 @@ static void main_calculated_words_cnt (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, 
 
   if (user_options->json == true)
   {
-    event_log_info (hashcat_ctx, "{ \"keyspace\": %" PRIu64 " }", status_ctx->words_cnt);
+    event_log_info (hashcat_ctx, "{ \"total_candidates\": %" PRIu64 " }", status_ctx->words_cnt);
   }
   else
   {
