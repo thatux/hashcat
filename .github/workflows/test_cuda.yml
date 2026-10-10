@@ -1,0 +1,116 @@
+##
+## Author......: See docs/credits.txt
+## License.....: MIT
+##
+
+## Runs the weekly test suite on real NVIDIA GPUs with the CUDA backend (issue
+## #4941), to complement .github/workflows/test.yml, which runs the same suite
+## on the CPU through PoCL because the GitHub runners have no GPU.
+##
+## The GPUs are rented from vast.ai. This job runs on the normal runner and
+## ci/vast/weekly_gpu.py rents one GPU per mode shard, has each box clone and
+## build hashcat at the commit under test and run tools/test.py with "-D 2"
+## (GPU) instead of "-D 1" (CPU), then destroys the boxes. The shard plan and
+## the test.py commands are the ones test.yml uses, so there is no second suite;
+## the bridge kind is the one kind this does not run.
+##
+## It runs on the weekly schedule and on manual dispatch only, never on pull
+## requests, so the vast.ai API key is never exposed to a fork's code. The key
+## is the only secret, it stays on this runner, and it is never sent to a rented
+## box. Setup is in ci/vast/README.md.
+
+name: test-cuda
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+      && format('test-cuda: {0}{1}{2}({3})',
+                inputs.optimized && 'opt ' || '',
+                inputs.pure && 'pure ' || '',
+                inputs.container && 'container ' || '',
+                inputs.modes)
+      || format('test-cuda ({0})', github.event_name) }}
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      modes:
+        description: 'Modes to test, "all" or a space separated list'
+        default: 'all'
+      optimized:
+        description: 'Test the optimized kernels'
+        type: boolean
+        default: true
+      pure:
+        description: 'Test the pure kernels'
+        type: boolean
+        default: true
+      container:
+        description: 'Test container files (TrueCrypt/VeraCrypt/LUKS/..)'
+        type: boolean
+        default: true
+      instances:
+        description: 'How many GPUs to rent and run in parallel'
+        default: '10'
+
+permissions:
+  contents: read
+
+jobs:
+  cuda:
+    # A scheduled run only makes sense on the real repository: a fork that has
+    # the key set can still trigger a run by hand, but its weekly cron should not
+    # spend the budget on its own.
+    if: github.event_name != 'schedule' || github.repository == 'hashcat/hashcat'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Skip when master has not changed in seven days
+        id: freshness
+        if: github.event_name == 'schedule'
+        run: |
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $(( 7 * 86400 )) ]; then
+            echo "no commit on master in the last seven days, nothing new to test"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v6
+        if: steps.freshness.outputs.run != 'false'
+        with:
+          python-version: '3.14'
+
+      - name: Install the vast.ai CLI
+        if: steps.freshness.outputs.run != 'false'
+        run: pip install vastai
+
+      - name: Run the suite on NVIDIA GPUs
+        if: steps.freshness.outputs.run != 'false'
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+          VAST_GPU_NAME: ${{ vars.VAST_GPU_NAME }}
+          VAST_MAX_DPH: ${{ vars.VAST_MAX_DPH }}
+          VAST_IMAGE: ${{ vars.VAST_IMAGE }}
+          MODES: ${{ inputs.modes || 'all' }}
+          INSTANCES: ${{ inputs.instances || '10' }}
+          # A schedule has no inputs, so the kinds are empty and all three run; a
+          # dispatch passes the three booleans as its chosen kinds. container is
+          # kept separate because it is its own mode pool.
+          OPTIMIZED: ${{ inputs.optimized }}
+          PURE: ${{ inputs.pure }}
+          CONTAINER: ${{ inputs.container }}
+        run: |
+          kinds=""
+          [ "$OPTIMIZED" = "false" ] || kinds="$kinds,opt"
+          [ "$PURE" = "false" ]      || kinds="$kinds,pure"
+          [ "$CONTAINER" = "false" ] || kinds="$kinds,container"
+          kinds="${kinds#,}"
+          if [ -z "$kinds" ]; then kinds="opt,pure,container"; fi
+          python ci/vast/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES"
