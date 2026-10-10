@@ -50,6 +50,11 @@ VAST_API = VAST_HOST + "/api/v0"
 # find and destroy leftovers without touching instances rented for anything else.
 INSTANCE_LABEL_PREFIX = "hashcat-cuda-"
 
+# The box prints this line once setup and build are done. Everything after it is
+# the attack output the console shows; everything before stays in the artifact.
+# The box script below prints the same literal, so keep the two in step.
+MARKER = "__HC_CONSOLE_BEGIN__"
+
 
 def env_default(key, default):
     """An environment variable, treating unset and empty the same. GitHub passes
@@ -164,9 +169,10 @@ def repo_url_and_ref(args):
     return url, ref
 
 
-def remote_script(repo_url, ref, bin_tasks):
+def remote_script(repo_url, ref, bin_tasks, sn):
     """The whole job for one box: set up, fetch the commit under test, build, and
-    run test.py for each of this box's tasks, OR-ing the per-task exit codes."""
+    run test.py for each of this box's tasks, OR-ing the per-task exit codes. sn
+    is the box's short name, which tags its groups and error annotations."""
     modes = {m for m, _ in bin_tasks}
     fetch = []
     if modes & LUKS1_MODES:
@@ -186,6 +192,7 @@ def remote_script(repo_url, ref, bin_tasks):
         runs.append(f"run_one {mode} {opts}".rstrip())
 
     return TEMPLATE.format(
+        sn=sn,
         repo_url=repo_url,
         ref=ref,
         fetch="\n".join(fetch),
@@ -195,11 +202,14 @@ def remote_script(repo_url, ref, bin_tasks):
 
 TEMPLATE = r"""set -eu
 export DEBIAN_FRONTEND=noninteractive
+SN="{sn}"
 
 echo "::group::setup"
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
-    build-essential git wget ca-certificates p7zip-full python3 python3-pip
+    build-essential git wget curl ca-certificates p7zip-full \
+    libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+    libffi-dev liblzma-dev tk-dev libncursesw5-dev xz-utils
 # Fetch exactly the commit under test, which may be a feature branch tip the
 # default clone would not carry, so init and fetch the ref by name.
 git init -q hashcat
@@ -209,32 +219,45 @@ git fetch -q --depth 1 origin {ref}
 git checkout -q FETCH_HEAD
 echo "testing $(git rev-parse HEAD)"
 make -j"$(nproc)"
-# New pip on an externally managed image (Ubuntu 24.04) needs --break-system-packages;
-# old pip (Ubuntu 22.04) does not know the flag and does not need it. Use it only when
-# this pip supports it, so the install works on either base image.
-if python3 -m pip install --help 2>/dev/null | grep -q -- --break-system-packages; then
-  PIPFLAGS="--break-system-packages"
-else
-  PIPFLAGS=""
-fi
-python3 -m pip install -q $PIPFLAGS -r tools/requirements.txt
+# The test oracles need Python 3.13 or newer (tools/requirements.txt pins crypt-r,
+# which the image's older system python cannot install), and they are installed
+# the way hashcat documents: pyenv builds the latest python and install_modules.sh
+# pins it at the repo root and installs requirements.txt into it. test.py then
+# finds that python through the pyenv shim. The build dependencies above are what
+# pyenv needs to compile the interpreter.
+export PYENV_ROOT="$HOME/.pyenv"
+curl -fsSL https://pyenv.run | bash
+export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init - bash)"
+bash tools/install_modules.sh
 # hashcat dlopens libnvrtc at run time; the toolkit image keeps it here, and the
 # host provides libcuda on the GPU.
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${{LD_LIBRARY_PATH:-}}"
 {fetch}
 echo "::endgroup::"
 
-echo "::group::backend info"
+# Everything from here is the attack output shown on the console; the setup and
+# build above stay in the captured log only, which is uploaded as an artifact.
+echo "__HC_CONSOLE_BEGIN__"
+
+echo "::group::[$SN] backend info"
 ./hashcat -I || true
 echo "::endgroup::"
 
 fail=0
 run_one () {{
   m="$1"; shift
-  echo "::group::test.py -m $m $* -D 2"
-  if python3 tools/test.py -m "$m" "$@" -D 2 -f; then rc=0; else rc=$?; fi
+  echo "::group::[$SN] test.py -m $m $* -D 2"
+  out=$(mktemp)
+  if python3 tools/test.py -m "$m" "$@" -D 2 -f >"$out" 2>&1; then rc=0; else rc=$?; fi
+  cat "$out"
   echo "::endgroup::"
-  if [ "$rc" -ne 0 ]; then fail=1; echo "FAIL mode $m [$*] rc=$rc"; fi
+  if [ "$rc" -ne 0 ]; then
+    fail=1
+    reason=$(grep -m1 -E '> (Error|Fault|Compare Error) :|oracle failed|did not round trip' "$out" | sed 's/^[[:space:]]*//' || true)
+    echo "::error title=[$SN] test.py failed on mode $m (rc $rc)::${{reason:-see the attack log above}}"
+  fi
+  rm -f "$out"
 }}
 
 {runs}
@@ -480,7 +503,7 @@ def main():
     print(f"{len(tasks)} tasks ({'+'.join(kinds)}) in {len(bins)} instances "
           f"of {args.gpu_name or 'any'} from {repo_url}@{ref}", flush=True)
 
-    scripts = [remote_script(repo_url, ref, b) for b in bins]
+    scripts = [remote_script(repo_url, ref, b, f"s{i}") for i, b in enumerate(bins)]
 
     # --check and --dry-run both run every step up to here (parse the options and
     # the environment, load ci_matrix, plan and balance the tasks, build each
@@ -541,18 +564,29 @@ def main():
             raise
 
     failed = [r for r in results if r.get("rc", 1) != 0]
+
+    # Show each box's attack output, the part after the console marker: the
+    # per-mode test.py groups and the error annotations the box emitted, like
+    # test.yml does. The setup and build output stays in the artifact only. A box
+    # that died before the marker failed in setup or build, so show that instead.
+    for r in sorted(results, key=lambda r: r["idx"]):
+        name = f"s{r['idx']}"
+        log = r.get("log")
+        text = Path(log).read_text() if log and os.path.exists(log) else ""
+        if MARKER in text:
+            sys.stdout.write(text.split(MARKER, 1)[1])
+        else:
+            print(f"::group::[{name}] setup or build failed before any attack")
+            sys.stdout.write(text[-6000:] if text else "(no output captured)\n")
+            print("::endgroup::")
+            print(f"::error title=[{name}] setup or build failed::"
+                  "see the log above or the uploaded artifact")
+
     print("\n===== results =====")
     for r in sorted(results, key=lambda r: r["idx"]):
         status = "OK" if r.get("rc") == 0 else "FAIL"
-        print(f"instance {r['idx']}: {status}"
-              + (f"  ({r['error']})" if r.get("error") else ""))
-        # Fold each box's full output into the GitHub log so a failure is readable.
-        log = r.get("log")
-        if log and os.path.exists(log):
-            print(f"::group::instance {r['idx']} log")
-            sys.stdout.write(Path(log).read_text())
-            print("::endgroup::")
-    print(f"\n{len(results) - len(failed)}/{len(results)} instances passed")
+        print(f"[s{r['idx']}] {status}" + (f"  ({r['error']})" if r.get("error") else ""))
+    print(f"{len(results) - len(failed)}/{len(results)} instances passed")
     return 1 if failed else 0
 
 
