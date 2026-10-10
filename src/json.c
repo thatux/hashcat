@@ -20,13 +20,21 @@ static void json_write (json_ctx_t *ctx, const char *text, const size_t len)
     return;
   }
 
-  if (ctx->buf_len + len < ctx->buf_size)
-  {
-    memcpy (ctx->buf + ctx->buf_len, text, len);
+  // Once a write does not fit, stop here and for every later write, so the buffer holds a clean
+  // truncated prefix rather than later shorter fields slipping in past a dropped one.
+  if (ctx->overflow == true) return;
 
-    ctx->buf_len += len;
-    ctx->buf[ctx->buf_len] = 0;
+  if (ctx->buf_len + len >= ctx->buf_size)
+  {
+    ctx->overflow = true;
+
+    return;
   }
+
+  memcpy (ctx->buf + ctx->buf_len, text, len);
+
+  ctx->buf_len += len;
+  ctx->buf[ctx->buf_len] = 0;
 }
 
 static void json_puts (json_ctx_t *ctx, const char *text)

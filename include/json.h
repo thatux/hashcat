@@ -25,6 +25,8 @@ typedef struct json_ctx
   size_t buf_len;        // bytes written so far (the finished length the caller reads back)
   size_t buf_size;       // capacity of buf, including room for the NUL
 
+  bool   overflow;       // a buffer write did not fit; all further output is dropped from there on
+
   int    depth;          // number of open containers
   bool   need_sep[JSON_MAX_DEPTH + 1]; // whether the next item at this depth needs a leading comma
   bool   after_key;      // the last thing written was a key, so the next value takes no comma
