@@ -113,4 +113,9 @@ jobs:
           [ "$CONTAINER" = "false" ] || kinds="$kinds,container"
           kinds="${kinds#,}"
           if [ -z "$kinds" ]; then kinds="opt,pure,container"; fi
+
+          # Validate the options, environment and plan before renting anything, so a
+          # misconfiguration fails here for free instead of after a GPU is billed.
+          python ci/vast/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES" --check
+
           python ci/vast/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES"

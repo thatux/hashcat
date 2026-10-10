@@ -45,6 +45,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 VAST_API = "https://console.vast.ai/api/v0"
 
+
+def env_default(key, default):
+    """An environment variable, treating unset and empty the same. GitHub passes
+    an unset repository variable to the step as an empty string, so a plain
+    os.environ.get(key, default) would hand back "" rather than the default."""
+    value = os.environ.get(key, "")
+    return value if value != "" else default
+
 # The upstream clone URL and ref a box falls back to when nothing in the
 # environment names the repository and commit under test (a plain local run). In
 # CI the GitHub environment overrides both, so the box tests exactly what was
@@ -306,7 +314,7 @@ def pick_offers(offers, count, gpu_name):
     does not pile several boxes onto one machine."""
     out, seen = [], set()
     for o in offers:
-        if gpu_name and gpu_name.lower() not in o["gpu_name"].lower():
+        if gpu_name and gpu_name.lower() != "any" and gpu_name.lower() not in o["gpu_name"].lower():
             continue
         host = o.get("host_id")
         if host in seen:
@@ -378,15 +386,15 @@ def main():
     p.add_argument("--kinds", default="opt,pure,container",
                    help="comma list of opt,pure,container (bridge is not run here)")
     p.add_argument("--instances", type=int,
-                   default=int(os.environ.get("VAST_CUDA_INSTANCES", "10")),
+                   default=int(env_default("VAST_CUDA_INSTANCES", "10")),
                    help="how many GPUs to rent and run in parallel")
-    p.add_argument("--gpu-name", default=os.environ.get("VAST_GPU_NAME", "RTX 3060"),
-                   help='substring the GPU must match, or "" for any that fits the filter')
-    p.add_argument("--max-dph", type=float, default=float(os.environ.get("VAST_MAX_DPH", "0.12")),
+    p.add_argument("--gpu-name", default=env_default("VAST_GPU_NAME", "RTX 3060"),
+                   help='substring the GPU must match, or "any" for anything that fits the filter')
+    p.add_argument("--max-dph", type=float, default=float(env_default("VAST_MAX_DPH", "0.12")),
                    help="most $/hour to pay for one GPU")
     p.add_argument("--min-gpu-ram", type=int, default=11, help="least GPU RAM in GB")
     p.add_argument("--min-reliability", type=float, default=0.98, help="least vast.ai reliability")
-    p.add_argument("--image", default=os.environ.get("VAST_IMAGE", "nvidia/cuda:12.2.2-devel-ubuntu22.04"),
+    p.add_argument("--image", default=env_default("VAST_IMAGE", "nvidia/cuda:12.2.2-devel-ubuntu22.04"),
                    help="CUDA docker image the box builds and runs in; its toolkit version sets the "
                         "minimum host driver CUDA the offer search requires")
     p.add_argument("--disk", type=int, default=24, help="instance disk in GB")
@@ -395,6 +403,8 @@ def main():
     p.add_argument("--ref", default=None, help="commit or branch under test (default: this CI commit)")
     p.add_argument("--keep", action="store_true", help="do not destroy the boxes (for debugging)")
     p.add_argument("--dry-run", action="store_true", help="print the plan and scripts, rent nothing")
+    p.add_argument("--check", action="store_true",
+                   help="validate the options, environment and plan, print a summary, rent nothing")
     args = p.parse_args()
 
     kinds = [k.strip() for k in args.kinds.split(",") if k.strip()]
@@ -415,11 +425,20 @@ def main():
 
     scripts = [remote_script(repo_url, ref, b) for b in bins]
 
-    if args.dry_run:
-        for i, (b, s) in enumerate(zip(bins, scripts)):
-            print(f"\n--- instance {i}: {len(b)} tasks "
-                  f"({' '.join(f'{m}:{k}' for m, k in sorted(b))}) ---")
-            print(s)
+    # --check and --dry-run both run every step up to here (parse the options and
+    # the environment, load ci_matrix, plan and balance the tasks, build each
+    # box's script), so a mistake in any of them fails now rather than after a
+    # GPU has been rented. --check prints a summary; --dry-run prints the scripts.
+    if args.check or args.dry_run:
+        for i, b in enumerate(bins):
+            tasks = " ".join(f"{m}:{k}" for m, k in sorted(b))
+            print(f"\n--- instance {i}: {len(b)} tasks ({tasks}) ---")
+            if args.dry_run:
+                print(scripts[i])
+        total = sum(len(b) for b in bins)
+        print(f"\nplan OK: {total} tasks in {len(bins)} instances, "
+              f"min host CUDA {image_cuda_version(args.image)}, GPU {args.gpu_name or 'any'}, "
+              f"max ${args.max_dph}/h")
         return 0
 
     api_key = os.environ.get("VAST_API_KEY")

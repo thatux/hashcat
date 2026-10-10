@@ -18,7 +18,7 @@ One secret, set once under **Settings -> Secrets and variables -> Actions**:
 
 Optional repository **variables** (same settings page, the Variables tab) tune the rental without touching the workflow:
 
-- `VAST_GPU_NAME`: the GPU to rent, as a substring, default `RTX 3060`. Set it to an empty value to take any GPU that fits the other filters.
+- `VAST_GPU_NAME`: the GPU to rent, as a substring, default `RTX 3060`. Set it to `any` to take any GPU that fits the other filters. An empty value is treated as unset and keeps the default.
 - `VAST_MAX_DPH`: the most to pay per GPU per hour, default `0.12`.
 - `VAST_IMAGE`: the CUDA docker image the box builds and runs in, default `nvidia/cuda:12.2.2-devel-ubuntu22.04`. Its toolkit version sets the minimum host driver CUDA the offer search accepts, so a higher image narrows the hosts that qualify.
 
