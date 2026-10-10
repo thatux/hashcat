@@ -384,18 +384,25 @@ def offer_query(args):
         "reliability2": {"gte": args.min_reliability},
         "dph_total": {"lte": args.max_dph},
         "disk_space": {"gte": args.disk},
+        # The rental's share of host CPUs. The build and the kernel compiles are CPU
+        # bound, so a box with too few cores is the slow link; a floor keeps those out.
+        "cpu_cores_effective": {"gte": args.min_cpu_cores},
         "type": "on-demand",
         "order": [["dph_total", "asc"]],
         "limit": 200,
     }
 
 
-def offer_pool(offers, gpu_name):
+def offer_pool(offers, gpu_name, min_cpu_cores):
     """All matching offers, one per host, cheapest first, as a pool the shards
-    pull from, so a shard whose host turns out to be bad can take the next one."""
+    pull from, so a shard whose host turns out to be bad can take the next one.
+    The core floor is re-checked here as well as in the query, so a server that
+    ignores the filter still cannot hand back an underpowered box."""
     out, seen = [], set()
     for o in offers:
         if gpu_name and gpu_name.lower() != "any" and gpu_name.lower() not in o["gpu_name"].lower():
+            continue
+        if (o.get("cpu_cores_effective") or 0) < min_cpu_cores:
             continue
         host = o.get("host_id")
         if host in seen:
@@ -588,6 +595,8 @@ def main():
     p.add_argument("--max-dph", type=float, default=float(env_default("VAST_MAX_DPH", "0.12")),
                    help="most $/hour to pay for one GPU")
     p.add_argument("--min-gpu-ram", type=int, default=11, help="least GPU RAM in GB")
+    p.add_argument("--min-cpu-cores", type=float, default=float(env_default("VAST_MIN_CPU_CORES", "8")),
+                   help="least host CPU cores the rental gets; the build and kernel compiles are CPU bound")
     p.add_argument("--min-reliability", type=float, default=0.98, help="least vast.ai reliability")
     p.add_argument("--image", default=env_default("VAST_IMAGE", "nvidia/cuda:12.2.2-devel-ubuntu22.04"),
                    help="CUDA docker image the box builds and runs in; its toolkit version sets the "
@@ -660,9 +669,10 @@ def main():
         sys.exit("no VAST_API_KEY in the environment")
     vast = Vast(api_key)
 
-    pool = offer_pool(vast.offers(offer_query(args)), args.gpu_name)
+    pool = offer_pool(vast.offers(offer_query(args)), args.gpu_name, args.min_cpu_cores)
     if not pool:
-        sys.exit("no vast.ai offers match the filter; raise --max-dph or clear --gpu-name")
+        sys.exit("no vast.ai offers match the filter; raise --max-dph, lower --min-cpu-cores, "
+                 "or clear --gpu-name")
     if len(pool) < len(bins):
         # Fewer hosts than instances asked for: run as many shards as there are
         # hosts, which also leaves no spares for the bad-host retry.
@@ -670,7 +680,7 @@ def main():
         bins = balance(tasks, len(pool), ci_matrix.mode_weight)
         scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout, args.max_load_per_cpu)
                    for i, b in enumerate(bins)]
-    print(f"{len(pool)} candidate host(s) for {len(bins)} instance(s), "
+    print(f"{len(pool)} candidate host(s) (>= {args.min_cpu_cores} cpu) for {len(bins)} instance(s), "
           f"each rejecting hosts over {args.max_load_per_cpu}x load per cpu", flush=True)
 
     # A thread-safe source of offers: each shard takes the next cheapest unused

@@ -98,6 +98,7 @@ jobs:
           VAST_GPU_NAME: ${{ vars.VAST_GPU_NAME }}
           VAST_MAX_DPH: ${{ vars.VAST_MAX_DPH }}
           VAST_IMAGE: ${{ vars.VAST_IMAGE }}
+          VAST_MIN_CPU_CORES: ${{ vars.VAST_MIN_CPU_CORES }}
           MODES: ${{ inputs.modes || 'all' }}
           INSTANCES: ${{ inputs.instances || '10' }}
           # A schedule has no inputs, so the kinds are empty and all three run; a
