@@ -56,9 +56,26 @@ DECLSPEC void pcfg_hash_setup (MAYBE_UNUSED PRIVATE_AS pcfg_hash_ctx_t *hc, MAYB
 
 DECLSPEC bool pcfg_hash (PRIVATE_AS const pcfg_hash_ctx_t *hc, PRIVATE_AS u32 *w, const u32 len, PRIVATE_AS u32 *dgst)
 {
+  // The pcfg candidate array holds the candidate zero padded only as far as the generator needs,
+  // which can be fewer than 64 words. A recipe like pad(pass, 100) reads past the candidate, so it
+  // would read whatever is left in the array beyond it. Copy the candidate into a buffer cleared to
+  // the full 256 bytes the recipe may reach, the same way the global path does, so the bytes past
+  // the candidate are zero.
+
+  u32 pw[64];
+
+  for (u32 i = 0; i < 64; i++) pw[i] = 0;
+
+  const u32 pw_len = (len >= 256) ? 256 : len;
+
+  for (u32 i = 0, idx = 0; i < pw_len; i += 4, idx += 1)
+  {
+    pw[idx] = w[idx];
+  }
+
   u32 r[16];
 
-  recipe_eval (&hc->st, w, w, len, hc->s, hc->salt_len, r);
+  recipe_eval (&hc->st, pw, pw, pw_len, hc->s, hc->salt_len, r);
 
   dgst[0] = r[DGST_R0];
   dgst[1] = r[DGST_R1];
