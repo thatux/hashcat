@@ -7,31 +7,36 @@
 
 ## Runs the weekly test suite on real NVIDIA GPUs through vast.ai, so the CUDA
 ## backend gets exercised (issue #4941). This runs on the GitHub runner, not on
-## the GPU: it works out the mode shards, rents one vast.ai GPU per shard, and
-## over SSH has each box clone hashcat at the commit under test, build it, and
-## run tools/test.py for its modes with "-D 2" (the GPU device type) instead of
-## the "-D 1" the GPU-less runners use. The boxes are destroyed when the run
-## ends, pass or fail.
+## the GPU. It builds one shared queue of (mode, kind) tasks and rents a set of
+## worker boxes; each box clones and builds hashcat at the commit under test,
+## sets up the oracles, then pulls tasks from the queue and runs tools/test.py
+## for each with "-D 2" (the GPU device type) in place of the "-D 1" the GPU-less
+## runners use. A box that dies mid-task puts the task back on the queue and a
+## replacement box is rented; boxes are destroyed as the queue drains, and every
+## task's output is streamed back as it finishes, so nothing is lost if a box is
+## later lost.
 ##
-## The shard plan and the per-mode commands are the same ones
-## .github/workflows/test.yml uses on the CPU: the mode pools and the balancing
-## come from .github/workflows/ci_matrix.py, and the per-kind test.py line is
-## the one from that workflow. Nothing here is a second test suite; the bridge
-## kind is the one test.yml kind this does not run.
+## The mode pools and the per-kind test.py commands are the same ones
+## .github/workflows/test.yml uses on the CPU: the pools come from
+## .github/workflows/ci_matrix.py and the per-kind test.py line is that
+## workflow's. Nothing here is a second test suite; the bridge kind is the one
+## test.yml kind this does not run.
 ##
 ##   weekly_gpu.py                                  all kinds, all modes
 ##   weekly_gpu.py --modes "0 100 1000"             just those modes
 ##   weekly_gpu.py --kinds opt,container            only those kinds
-##   weekly_gpu.py --instances 4 --dry-run          print the plan, rent nothing
+##   weekly_gpu.py --instances 40 --dry-run         print the plan, rent nothing
 ##
 ## Authentication is the vast.ai API key in the VAST_API_KEY environment
 ## variable; it is used only to talk to vast.ai and is never sent to a rented
 ## box. Each box gets a throwaway SSH key generated for this run, so no private
-## key is stored anywhere. The process exits non-zero when any shard fails.
+## key is stored anywhere. The process exits non-zero when any task fails or any
+## task never ran.
 
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -39,6 +44,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from collections import deque
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -50,13 +56,8 @@ VAST_API = VAST_HOST + "/api/v0"
 # find and destroy leftovers without touching instances rented for anything else.
 INSTANCE_LABEL_PREFIX = "hashcat-cuda-"
 
-# The box prints this line once setup and build are done. Everything after it is
-# the attack output the console shows; everything before stays in the artifact.
-# The box script below prints the same literal, so keep the two in step.
-MARKER = "__HC_CONSOLE_BEGIN__"
-
-# Exit code the box script uses to say "this host is bad, drop it and try another"
-# rather than "a test failed". run_shard turns it into a retry on the next offer.
+# Exit code the setup script uses to say "this host is bad, drop it and try
+# another" rather than "setup failed". acquire_box turns it into a retry.
 REJECT_CODE = 77
 
 
@@ -120,11 +121,14 @@ def wanted_modes(ci_matrix, pool, modes_arg):
 
 
 def plan_tasks(ci_matrix, kinds, modes_arg):
-    """One (mode, kind) task per mode and requested kind.
+    """One (mode, kind) task per mode and requested kind, heaviest first.
 
     opt and pure draw from the kernel pool test.yml shards; container draws from
-    test.py's own container list. The tasks are what the boxes run; they are
-    bin packed into instances next.
+    test.py's own container list. The tasks become a shared queue the worker boxes
+    pull from, so there is no per-box split: a box takes the next task whenever it
+    is free, which balances the load without guessing. Ordering heaviest first (by
+    ci_matrix.mode_weight) keeps the slow modes from all landing at the end on one
+    straggler.
     """
     kernel_pool = sorted(m for m in ci_matrix.modes_on_disk("test")
                          if m not in BRIDGE_ONLY_MODES)
@@ -135,23 +139,8 @@ def plan_tasks(ci_matrix, kinds, modes_arg):
         pool = container_pool if kind == "container" else kernel_pool
         for mode in sorted(wanted_modes(ci_matrix, pool, modes_arg)):
             tasks.append((mode, kind))
+    tasks.sort(key=lambda t: ci_matrix.mode_weight(t[0]), reverse=True)
     return tasks
-
-
-def balance(tasks, n, weight):
-    """Longest-processing-time bin packing of tasks into n instances by weight.
-
-    Same idea as ci_matrix.balance_shards, over (mode, kind) tasks rather than
-    modes, so the heavy modes spread across the boxes instead of piling onto one.
-    """
-    n = max(1, min(n, len(tasks)))
-    bins = [[] for _ in range(n)]
-    load = [0] * n
-    for mode, kind in sorted(tasks, key=lambda t: weight(t[0]), reverse=True):
-        i = load.index(min(load))
-        bins[i].append((mode, kind))
-        load[i] += weight(mode)
-    return [b for b in bins if b]
 
 
 def repo_url_and_ref(args):
@@ -173,48 +162,9 @@ def repo_url_and_ref(args):
     return url, ref
 
 
-def remote_script(repo_url, ref, bin_tasks, sn, mode_timeout, max_load):
-    """The whole job for one box: set up, fetch the commit under test, build, and
-    run test.py for each of this box's tasks, OR-ing the per-task exit codes. sn
-    is the box's short name, which tags its groups and error annotations;
-    mode_timeout caps a single mode's test.py run; max_load is the pre-attack
-    load-per-cpu ceiling above which the box drops itself for the launcher to
-    replace."""
-    modes = {m for m, _ in bin_tasks}
-    fetch = []
-    if modes & LUKS1_MODES:
-        fetch.append(
-            'mkdir -p tools/luks_tests && ( cd tools/luks_tests && '
-            'wget -q https://hashcat.net/misc/example_hashes/hashcat_luks_testfiles.7z && '
-            '7z x -y hashcat_luks_testfiles.7z >/dev/null && rm -f hashcat_luks_testfiles.7z )')
-    if modes & LUKS2_MODES:
-        fetch.append(
-            'mkdir -p tools/luks2_tests && ( cd tools/luks2_tests && '
-            'wget -q https://hashcat.net/misc/example_hashes/luks2_tests.7z && '
-            '7z x -y luks2_tests.7z >/dev/null && rm -f luks2_tests.7z )')
-
-    runs = []
-    for mode, kind in sorted(bin_tasks):
-        opts = KIND_OPTS[kind]
-        runs.append(f"run_one {mode} {opts}".rstrip())
-
-    return TEMPLATE.format(
-        sn=sn,
-        mode_timeout=mode_timeout,
-        max_load=max_load,
-        reject_code=REJECT_CODE,
-        repo_url=repo_url,
-        ref=ref,
-        fetch="\n".join(fetch),
-        runs="\n".join(runs),
-    )
-
-
-TEMPLATE = r"""set -eu
+SETUP_SCRIPT = r"""set -eu
 export DEBIAN_FRONTEND=noninteractive
-SN="{sn}"
-
-echo "::group::setup"
+echo "setup on $(hostname), $(nproc) cpu"
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
     build-essential git wget curl ca-certificates p7zip-full \
@@ -229,69 +179,67 @@ git fetch -q --depth 1 origin {ref}
 git checkout -q FETCH_HEAD
 echo "testing $(git rev-parse HEAD)"
 make -j"$(nproc)"
-# The test oracles need Python 3.13 or newer (tools/requirements.txt pins crypt-r,
-# which the image's older system python cannot install), and they are installed
-# the way hashcat documents: pyenv builds the latest python and install_modules.sh
-# pins it at the repo root and installs requirements.txt into it. test.py then
-# finds that python through the pyenv shim. The build dependencies above are what
-# pyenv needs to compile the interpreter.
+# Oracles via pyenv, the way hashcat documents (install_modules.sh compiles the
+# latest CPython and installs tools/requirements.txt into it; a prebuilt
+# interpreter would skip the compile but this keeps install_modules.sh as is).
 export PYENV_ROOT="$HOME/.pyenv"
 curl -fsSL https://pyenv.run | bash
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init - bash)"
 bash tools/install_modules.sh
-# hashcat dlopens libnvrtc at run time; the toolkit image keeps it here, and the
-# host provides libcuda on the GPU.
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${{LD_LIBRARY_PATH:-}}"
-{fetch}
-echo "::endgroup::"
-
-# Everything from here is the attack output shown on the console; the setup and
-# build above stay in the captured log only, which is uploaded as an artifact.
-echo "__HC_CONSOLE_BEGIN__"
-
-echo "::group::[$SN] backend info"
+# Health gate before the box joins the pool: the CUDA backend must see a device
+# and the host must be sane, otherwise exit the reject code so the launcher drops
+# this host and rents another rather than running every task on a bad box.
 hcinfo=$(./hashcat -I 2>&1 || true)
-printf '%s\n' "$hcinfo"
-echo "::endgroup::"
-
-# A quick check before the real attacks: the CUDA backend must actually see a GPU
-# here, and the host must still be sane after the build. If either fails, exit with
-# the reject code so the launcher drops this host and tries another, rather than
-# letting every mode hang or error on a box that cannot run them.
 if ! printf '%s' "$hcinfo" | grep -qiE 'CUDA[. ]?Info|Backend Device ID'; then
-  echo "::error title=[$SN] CUDA backend unusable, dropping host::hashcat -I listed no device"
+  echo "no CUDA device in hashcat -I, dropping host" >&2
   exit {reject_code}
 fi
 read l1 rest < /proc/loadavg
 if [ "$(awk -v l="$l1" -v n="$(nproc)" 'BEGIN {{ print (l > {max_load} * n) ? 1 : 0 }}')" = "1" ]; then
-  echo "::error title=[$SN] host overloaded, dropping host::load $l1 on $(nproc) cpus before tests"
+  echo "host overloaded (load $l1 on $(nproc) cpu), dropping host" >&2
   exit {reject_code}
 fi
-
-fail=0
-run_one () {{
-  m="$1"; shift
-  echo "::group::[$SN] test.py -m $m $* -D 2"
-  out=$(mktemp)
-  # Cap each mode so one that hangs (a wedged host, a stuck kernel build) fails
-  # this mode rather than running until the workflow's own timeout.
-  if timeout -k 30 {mode_timeout} python3 tools/test.py -m "$m" "$@" -D 2 -f >"$out" 2>&1; then rc=0; else rc=$?; fi
-  cat "$out"
-  echo "::endgroup::"
-  if [ "$rc" -ne 0 ]; then
-    fail=1
-    reason=$(grep -m1 -E '> (Error|Fault|Compare Error) :|oracle failed|did not round trip' "$out" | sed 's/^[[:space:]]*//' || true)
-    if [ "$rc" -eq 124 ]; then reason="timed out after {mode_timeout}s"; fi
-    echo "::error title=[$SN] test.py failed on mode $m (rc $rc)::${{reason:-see the attack log above}}"
-  fi
-  rm -f "$out"
-}}
-
-{runs}
-
-exit $fail
+echo "SETUP_OK"
 """
+
+
+def setup_script(repo_url, ref, max_load):
+    return SETUP_SCRIPT.format(repo_url=repo_url, ref=ref, max_load=max_load,
+                               reject_code=REJECT_CODE)
+
+
+def luks_fetch(mode, kind):
+    """A command that fetches, once, the LUKS container archive a mode needs. The
+    TrueCrypt, VeraCrypt and CryptoLoop containers are in the tree already."""
+    if kind != "container":
+        return ""
+    if mode in LUKS1_MODES:
+        return ('{ [ -d tools/luks_tests ] || ( mkdir -p tools/luks_tests && cd tools/luks_tests && '
+                'wget -q https://hashcat.net/misc/example_hashes/hashcat_luks_testfiles.7z && '
+                '7z x -y hashcat_luks_testfiles.7z >/dev/null && rm -f hashcat_luks_testfiles.7z ); } && ')
+    if mode in LUKS2_MODES:
+        return ('{ [ -d tools/luks2_tests ] || ( mkdir -p tools/luks2_tests && cd tools/luks2_tests && '
+                'wget -q https://hashcat.net/misc/example_hashes/luks2_tests.7z && '
+                '7z x -y luks2_tests.7z >/dev/null && rm -f luks2_tests.7z ); } && ')
+    return ""
+
+
+def task_command(mode, kind, mode_timeout):
+    """The remote command for one (mode, kind) task on an already set up box: set
+    the environment the build and pyenv left, fetch a LUKS archive if the mode
+    needs one, then run test.py under a timeout. The command's exit code is
+    test.py's, so the launcher reads pass or fail straight from the SSH exit."""
+    opts = KIND_OPTS[kind]
+    mode_opts = f"-m {mode}" + (f" {opts}" if opts else "")
+    return (
+        'cd /root/hashcat && '
+        'export PATH="$HOME/.pyenv/shims:$HOME/.pyenv/bin:$PATH" && '
+        'export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}" && '
+        + luks_fetch(mode, kind) +
+        f'timeout -k 30 {mode_timeout} python3 tools/test.py {mode_opts} -D 2 -f 2>&1'
+    )
 
 
 class Vast:
@@ -499,73 +447,132 @@ def probe_host(host, port, key_path):
         return None
 
 
-def run_shard(vast, get_offer, bin_tasks, script, key_path, pub_key, args, result):
-    """Rent a healthy box, run its script over SSH, record the outcome, destroy the
-    box. A host that is unreachable, has no GPU, or is too loaded is destroyed and
-    the next offer tried, up to args.max_attempts, so a bad shared host does not
-    sink the shard."""
-    name = f"s{result['idx']}"
-    log_path = Path(args.logdir) / f"{name}.log"
-    result["log"] = str(log_path)
+class BoxDied(Exception):
+    """A task's SSH did not return or the connection failed: the box is gone."""
 
-    for attempt in range(1, args.max_attempts + 1):
+
+FAIL_RE = re.compile(r"> (Error|Fault|Compare Error) :|oracle failed|did not round trip")
+
+
+def run_task(host, port, key_path, mode, kind, args):
+    """Run one task on a set up box. Returns (rc, output) where rc is test.py's own
+    exit code. Raises BoxDied when SSH itself fails or does not return, so the task
+    can be requeued for another box rather than counted as a mode failure."""
+    cmd = task_command(mode, kind, args.mode_timeout)
+    try:
+        r = ssh_run(host, port, key_path, cmd, timeout=args.mode_timeout + 180)
+    except subprocess.TimeoutExpired:
+        raise BoxDied("ssh did not return in time")
+    if r.returncode == 255:
+        raise BoxDied("ssh connection failed: " + (r.stderr or "").strip()[:120])
+    return r.returncode, r.stdout
+
+
+def record_result(name, mode, kind, rc, out, args, stats, print_lock):
+    """Stream one task's result as it finishes: write its log, fold its output into
+    the run log, and annotate a failure, like test.yml's per-mode groups."""
+    try:
+        Path(args.logdir, f"m{mode}_{kind}.log").write_text(out)
+    except OSError:
+        pass
+    reason = ""
+    if rc != 0:
+        if rc == 124:
+            reason = f"timed out after {args.mode_timeout}s"
+        else:
+            m = FAIL_RE.search(out)
+            reason = m.group(0) if m else "see the attack log above"
+    with print_lock:
+        print(f"::group::[{name}] test.py -m {mode} {KIND_OPTS[kind]} -D 2  (rc {rc})", flush=True)
+        sys.stdout.write(out if out.endswith("\n") else out + "\n")
+        print("::endgroup::", flush=True)
+        if rc != 0:
+            print(f"::error title=mode {mode} ({kind}) failed on CUDA (rc {rc})::{reason}", flush=True)
+    with stats["lock"]:
+        stats["done"] += 1
+        if rc == 0:
+            stats["ok"] += 1
+        else:
+            stats["failed"].append((mode, kind, rc))
+
+
+def acquire_box(name, vast, get_offer, setup, key_path, pub_key, args, print_lock):
+    """Rent offers until one boots, passes the health probe and finishes setup;
+    return (instance_id, host, port). Return None when offers run out. A rejected
+    or broken box is destroyed before the next offer is tried."""
+    while True:
         offer = get_offer()
         if offer is None:
-            result.setdefault("rc", 1)
-            result.setdefault("error", "ran out of offers to try")
-            print(f"[{name}] no more offers to try", flush=True)
-            return
+            return None
         instance_id = None
         try:
             instance_id = vast.create(offer["id"], args.image, args.disk, INSTANCE_LABEL_PREFIX + name)
-            result["instance"] = instance_id
-            print(f"[{name}] attempt {attempt}: rented {instance_id} on {offer['gpu_name']} "
-                  f"(${offer['dph_total']:.3f}/h, {offer.get('geolocation')})", flush=True)
+            with print_lock:
+                print(f"[{name}] rented {instance_id} on {offer['gpu_name']} "
+                      f"(${offer['dph_total']:.3f}/h, {offer.get('geolocation')}), building", flush=True)
             vast.attach_ssh(instance_id, pub_key)
             host, port = wait_ssh(vast, instance_id, key_path, time.time() + args.boot_timeout)
-
             health = probe_host(host, port, key_path)
             if health is None or health["gpus"] < 1 \
                     or health["load1"] > args.max_load_per_cpu * health["ncpu"]:
-                why = ("unreachable" if health is None
-                       else "no GPU visible" if health["gpus"] < 1
-                       else f"host load {health['load1']:.0f} on {health['ncpu']} cpus")
-                print(f"[{name}] rejecting host ({why}), trying another offer", flush=True)
-                continue  # the finally destroys this instance
-
-            print(f"[{name}] up at {host}:{port} "
-                  f"(load {health['load1']:.1f}/{health['ncpu']} cpu, {health['gpus']} gpu), "
-                  f"running {len(bin_tasks)} tasks", flush=True)
-            rc = run_detached(host, port, key_path, script, log_path,
+                why = ("unreachable" if health is None else "no GPU" if health["gpus"] < 1
+                       else f"load {health['load1']:.0f}/{health['ncpu']}cpu")
+                with print_lock:
+                    print(f"[{name}] rejecting host ({why})", flush=True)
+                vast.destroy(instance_id)
+                continue
+            rc = run_detached(host, port, key_path, setup,
+                              str(Path(args.logdir) / f"{name}_setup.log"),
                               time.time() + args.run_timeout)
-            if rc is None:
-                # The box ran past the deadline without finishing, which on a shared
-                # host usually means it is too slow to be worth waiting on; drop it.
-                print(f"[{name}] no result in {args.run_timeout}s, trying another offer", flush=True)
+            if rc != 0:
+                why = ("rejected itself (no GPU or overloaded)" if rc == REJECT_CODE
+                       else "setup timed out" if rc is None else f"setup failed rc {rc}")
+                with print_lock:
+                    print(f"[{name}] {why}, trying another host", flush=True)
+                vast.destroy(instance_id)
                 continue
-            if rc == REJECT_CODE:
-                # The box's own pre-attack check found it unfit (no CUDA device or
-                # it got loaded during the build); drop it and try another offer.
-                print(f"[{name}] host dropped itself before the attacks, trying another offer",
-                      flush=True)
-                continue
-            result["rc"] = rc
-            return
-        except Exception as exc:  # boot or ssh trouble: try the next offer
-            result["error"] = str(exc)
-            print(f"[{name}] attempt {attempt} error: {exc}", flush=True)
-        finally:
+            with print_lock:
+                print(f"[{name}] ready ({health['ncpu']} cpu, {health['gpus']} gpu)", flush=True)
+            return instance_id, host, port
+        except Exception as exc:
+            with print_lock:
+                print(f"[{name}] acquire error: {exc}", flush=True)
             if instance_id is not None and not args.keep:
-                if vast.destroy(instance_id):
-                    print(f"[{name}] destroyed instance {instance_id}", flush=True)
-                else:
-                    print(f"[{name}] WARNING: could not destroy instance {instance_id}, "
-                          f"the cleanup step should catch it", flush=True)
-            result["instance"] = None
+                vast.destroy(instance_id)
+            continue
 
-    result.setdefault("rc", 1)
-    result.setdefault("error", f"no healthy host in {args.max_attempts} attempts")
-    print(f"[{name}] gave up after {args.max_attempts} attempts", flush=True)
+
+def worker(name, vast, get_offer, get_task, requeue, setup, key_path, pub_key, args, stats, print_lock):
+    """One worker box: acquire a healthy box, then pull tasks from the shared queue
+    and run them until the queue is empty. If the box dies mid-task the task is
+    requeued and a replacement box is rented, up to args.max_attempts boxes."""
+    for _ in range(args.max_attempts):
+        box = acquire_box(name, vast, get_offer, setup, key_path, pub_key, args, print_lock)
+        if box is None:
+            with print_lock:
+                print(f"[{name}] no more offers; stopping", flush=True)
+            return
+        instance_id, host, port = box
+        try:
+            while True:
+                task = get_task()
+                if task is None:
+                    return  # queue drained; finally below destroys the box
+                mode, kind = task
+                try:
+                    rc, out = run_task(host, port, key_path, mode, kind, args)
+                except BoxDied as exc:
+                    requeue(task)
+                    with print_lock:
+                        print(f"[{name}] box died on m{mode} ({exc}); requeued, replacing box",
+                              flush=True)
+                    break  # leave the task loop and acquire a replacement box
+                record_result(name, mode, kind, rc, out, args, stats, print_lock)
+        finally:
+            if not args.keep:
+                vast.destroy(instance_id)
+    with print_lock:
+        print(f"[{name}] gave up after {args.max_attempts} boxes", flush=True)
 
 
 def cleanup_all(vast):
@@ -642,28 +649,22 @@ def main():
         print("no testable modes in the requested set, nothing to run")
         return 0
 
-    bins = balance(tasks, args.instances, ci_matrix.mode_weight)
     repo_url, ref = repo_url_and_ref(args)
-    print(f"{len(tasks)} tasks ({'+'.join(kinds)}) in {len(bins)} instances "
-          f"of {args.gpu_name or 'any'} from {repo_url}@{ref}", flush=True)
+    setup = setup_script(repo_url, ref, args.max_load_per_cpu)
+    print(f"{len(tasks)} tasks ({'+'.join(kinds)}) from {repo_url}@{ref}, "
+          f"up to {args.instances} parallel {args.gpu_name or 'any'} boxes pulling a shared queue",
+          flush=True)
 
-    scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout, args.max_load_per_cpu)
-               for i, b in enumerate(bins)]
-
-    # --check and --dry-run both run every step up to here (parse the options and
-    # the environment, load ci_matrix, plan and balance the tasks, build each
-    # box's script), so a mistake in any of them fails now rather than after a
-    # GPU has been rented. --check prints a summary; --dry-run prints the scripts.
+    # --check and --dry-run run every step up to here (options, environment, task
+    # plan, setup script and a sample task command), so a mistake fails now rather
+    # than after a GPU is rented. --dry-run also prints the scripts.
     if args.check or args.dry_run:
-        for i, b in enumerate(bins):
-            tasks = " ".join(f"{m}:{k}" for m, k in sorted(b))
-            print(f"\n--- instance {i}: {len(b)} tasks ({tasks}) ---")
-            if args.dry_run:
-                print(scripts[i])
-        total = sum(len(b) for b in bins)
-        print(f"\nplan OK: {total} tasks in {len(bins)} instances, "
-              f"min host CUDA {image_cuda_version(args.image)}, GPU {args.gpu_name or 'any'}, "
-              f"max ${args.max_dph}/h")
+        print(f"plan OK: {len(tasks)} tasks, min host CUDA {image_cuda_version(args.image)}, "
+              f"GPU {args.gpu_name or 'any'}, >= {args.min_cpu_cores} cpu, max ${args.max_dph}/h")
+        if args.dry_run:
+            print("\n--- setup script ---\n" + setup)
+            m, k = tasks[0]
+            print("\n--- sample task command ---\n" + task_command(m, k, args.mode_timeout))
         return 0
 
     api_key = os.environ.get("VAST_API_KEY")
@@ -675,23 +676,24 @@ def main():
     if not pool:
         sys.exit("no vast.ai offers match the filter; raise --max-dph, lower --min-cpu-cores, "
                  "or clear --gpu-name")
-    # Decide how many shards to run: at most what was asked and at most the hosts
-    # we have, but always leave some offers as spares so a dead or rejected host
-    # can be replaced. With no spares, one unreplaceable host fails the whole run.
-    shards = min(args.instances, len(pool))
-    if shards >= len(pool) and len(pool) >= 4:
-        shards = len(pool) - max(1, len(pool) // 5)  # reserve about a fifth, at least one
-    if shards != len(bins):
-        bins = balance(tasks, shards, ci_matrix.mode_weight)
-        scripts = [remote_script(repo_url, ref, b, f"s{i}", args.mode_timeout, args.max_load_per_cpu)
-                   for i, b in enumerate(bins)]
-    print(f"{len(pool)} candidate host(s) (>= {args.min_cpu_cores} cpu): {len(bins)} instance(s) "
-          f"plus {len(pool) - len(bins)} spare(s), rejecting hosts over "
-          f"{args.max_load_per_cpu}x load per cpu", flush=True)
+    nworkers = min(args.instances, len(pool))
+    print(f"{len(pool)} candidate host(s) (>= {args.min_cpu_cores} cpu): starting {nworkers} "
+          f"worker(s), the rest are spares for replacing dead hosts", flush=True)
 
-    # A thread-safe source of offers: each shard takes the next cheapest unused
-    # host, so no two shards share a host and a rejected host is replaced from the
-    # same pool rather than reused.
+    # The shared work: a queue of (mode, kind) tasks the workers pull from, and a
+    # thread-safe source of offers so each worker takes a distinct host and a dead
+    # host's work is replaced from the spares.
+    queue = deque(tasks)
+    qlock = threading.Lock()
+
+    def get_task():
+        with qlock:
+            return queue.popleft() if queue else None
+
+    def requeue(task):
+        with qlock:
+            queue.append(task)  # back of the queue, so it does not spin one box
+
     offer_lock = threading.Lock()
     offer_next = [0]
 
@@ -703,58 +705,49 @@ def main():
             offer_next[0] += 1
             return o
 
+    stats = {"ok": 0, "failed": [], "done": 0, "lock": threading.Lock()}
+    print_lock = threading.Lock()
+
     if args.logdir:
         os.makedirs(args.logdir, exist_ok=True)
     else:
         args.logdir = tempfile.mkdtemp(prefix="cuda-ci-")
+
     with tempfile.TemporaryDirectory() as keydir:
         key_path = os.path.join(keydir, "id_ed25519")
         subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-q", "-f", key_path], check=True)
         pub_key = Path(key_path + ".pub").read_text().strip()
 
-        results = [{"idx": i} for i in range(len(bins))]
         threads = []
-        for b, s, res in zip(bins, scripts, results):
-            t = threading.Thread(target=run_shard,
-                                 args=(vast, get_offer, b, s, key_path, pub_key, args, res))
+        for i in range(nworkers):
+            t = threading.Thread(target=worker,
+                                 args=(f"w{i}", vast, get_offer, get_task, requeue, setup,
+                                       key_path, pub_key, args, stats, print_lock))
             t.start()
             threads.append(t)
-            time.sleep(2)  # stagger the create calls a little
+            time.sleep(1)  # stagger the create calls a little
         try:
             for t in threads:
                 t.join()
         except KeyboardInterrupt:
-            print("interrupted; destroying any instances still up", flush=True)
-            for res in results:
-                if res.get("instance"):
-                    vast.destroy(res["instance"])
+            print("interrupted; destroying every instance we labeled", flush=True)
+            cleanup_all(vast)
             raise
 
-    failed = [r for r in results if r.get("rc", 1) != 0]
-
-    # Show each box's attack output, the part after the console marker: the
-    # per-mode test.py groups and the error annotations the box emitted, like
-    # test.yml does. The setup and build output stays in the artifact only. A box
-    # that died before the marker failed in setup or build, so show that instead.
-    for r in sorted(results, key=lambda r: r["idx"]):
-        name = f"s{r['idx']}"
-        log = r.get("log")
-        text = Path(log).read_text() if log and os.path.exists(log) else ""
-        if MARKER in text:
-            sys.stdout.write(text.split(MARKER, 1)[1])
-        else:
-            print(f"::group::[{name}] setup or build failed before any attack")
-            sys.stdout.write(text[-6000:] if text else "(no output captured)\n")
-            print("::endgroup::")
-            print(f"::error title=[{name}] setup or build failed::"
-                  "see the log above or the uploaded artifact")
-
-    print("\n===== results =====")
-    for r in sorted(results, key=lambda r: r["idx"]):
-        status = "OK" if r.get("rc") == 0 else "FAIL"
-        print(f"[s{r['idx']}] {status}" + (f"  ({r['error']})" if r.get("error") else ""))
-    print(f"{len(results) - len(failed)}/{len(results)} instances passed")
-    return 1 if failed else 0
+    remaining = list(queue)
+    total = len(tasks)
+    print("\n===== results =====", flush=True)
+    print(f"{stats['done']}/{total} tasks ran: {stats['ok']} ok, {len(stats['failed'])} failed, "
+          f"{len(remaining)} never ran", flush=True)
+    if stats["failed"]:
+        print("FAILED modes: " + " ".join(f"{m}:{k}(rc{rc})"
+              for m, k, rc in sorted(stats["failed"])), flush=True)
+    if remaining:
+        shown = " ".join(f"{m}:{k}" for m, k in sorted(remaining)[:80])
+        print(f"UNTESTED modes ({len(remaining)}): {shown}" + (" ..." if len(remaining) > 80 else ""),
+              flush=True)
+    # Green only when every task ran and every one passed.
+    return 0 if (not stats["failed"] and not remaining) else 1
 
 
 if __name__ == "__main__":
