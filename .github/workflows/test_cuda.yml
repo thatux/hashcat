@@ -7,17 +7,17 @@
 ## #4941), to complement .github/workflows/test.yml, which runs the same suite
 ## on the CPU through PoCL because the GitHub runners have no GPU.
 ##
-## The GPUs are rented from vast.ai. This job runs on the normal runner and
-## ci/vast/weekly_gpu.py rents one GPU per mode shard, has each box clone and
-## build hashcat at the commit under test and run tools/test.py with "-D 2"
-## (GPU) instead of "-D 1" (CPU), then destroys the boxes. The shard plan and
-## the test.py commands are the ones test.yml uses, so there is no second suite;
-## the bridge kind is the one kind this does not run.
+## The GPUs are AWS EC2 spot instances. This job runs on the normal runner and
+## ci/aws/weekly_gpu.py builds a shared queue of (mode, kind) tasks, launches a
+## set of GPU instances, and has each clone and build hashcat at the commit under
+## test and run tools/test.py with "-D 2" (GPU) instead of "-D 1" (CPU), then
+## terminates them. The mode pools and the test.py commands are the ones test.yml
+## uses, so there is no second suite; the bridge kind is the one kind this does
+## not run.
 ##
 ## It runs on the weekly schedule and on manual dispatch only, never on pull
-## requests, so the vast.ai API key is never exposed to a fork's code. The key
-## is the only secret, it stays on this runner, and it is never sent to a rented
-## box. Setup is in ci/vast/README.md.
+## requests, so the AWS credentials are never exposed to a fork's code. They stay
+## on this runner and are never sent to an instance. Setup is in ci/aws/README.md.
 
 name: test-cuda
 
@@ -87,18 +87,19 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install the vast.ai CLI
+      - name: Install boto3
         if: steps.freshness.outputs.run != 'false'
-        run: pip install vastai
+        run: pip install boto3
 
       - name: Run the suite on NVIDIA GPUs
         if: steps.freshness.outputs.run != 'false'
         env:
-          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-          VAST_GPU_NAME: ${{ vars.VAST_GPU_NAME }}
-          VAST_MAX_DPH: ${{ vars.VAST_MAX_DPH }}
-          VAST_IMAGE: ${{ vars.VAST_IMAGE }}
-          VAST_MIN_CPU_CORES: ${{ vars.VAST_MIN_CPU_CORES }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_INSTANCE_TYPES: ${{ vars.AWS_INSTANCE_TYPES }}
+          AWS_MAX_PRICE: ${{ vars.AWS_MAX_PRICE }}
+          AWS_AMI: ${{ vars.AWS_AMI }}
           MODES: ${{ inputs.modes || 'all' }}
           INSTANCES: ${{ inputs.instances || '10' }}
           # A schedule has no inputs, so the kinds are empty and all three run; a
@@ -115,13 +116,13 @@ jobs:
           kinds="${kinds#,}"
           if [ -z "$kinds" ]; then kinds="opt,pure,container"; fi
 
-          # Validate the options, environment and plan before renting anything, so a
-          # misconfiguration fails here for free instead of after a GPU is billed.
-          python ci/vast/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES" --check
+          # Validate the options and plan before launching anything, so a
+          # misconfiguration fails here for free instead of after an instance runs.
+          python ci/aws/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES" --check
 
-          python ci/vast/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES" --logdir cuda-logs
+          python ci/aws/weekly_gpu.py --modes "$MODES" --kinds "$kinds" --instances "$INSTANCES" --logdir cuda-logs
 
-      - name: Upload the per-instance logs
+      - name: Upload the per-task logs
         if: always() && steps.freshness.outputs.run != 'false'
         uses: actions/upload-artifact@v7
         with:
@@ -129,9 +130,9 @@ jobs:
           path: cuda-logs/
           if-no-files-found: ignore
 
-  # A safety net: the launcher destroys its boxes itself, but if the job above is
-  # cancelled or times out before it can, this always-run job destroys whatever is
-  # still labeled as ours so nothing keeps billing.
+  # A safety net: the launcher terminates its instances itself, but if the job
+  # above is cancelled or times out before it can, this always-run job terminates
+  # whatever is still tagged as ours so nothing keeps billing.
   cleanup:
     needs: cuda
     if: always() && (github.event_name != 'schedule' || github.repository == 'hashcat/hashcat')
@@ -141,7 +142,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
-      - name: Destroy any leftover instances
+      - run: pip install boto3
+      - name: Terminate any leftover instances
         env:
-          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-        run: python ci/vast/weekly_gpu.py --cleanup
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: python ci/aws/weekly_gpu.py --cleanup
