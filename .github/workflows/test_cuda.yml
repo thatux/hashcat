@@ -64,7 +64,7 @@ jobs:
     # spend the budget on its own.
     if: github.event_name != 'schedule' || github.repository == 'hashcat/hashcat'
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 350
 
     steps:
       - uses: actions/checkout@v7

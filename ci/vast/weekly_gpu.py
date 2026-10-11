@@ -603,8 +603,10 @@ def main():
                         "minimum host driver CUDA the offer search requires")
     p.add_argument("--disk", type=int, default=24, help="instance disk in GB")
     p.add_argument("--boot-timeout", type=int, default=900, help="seconds to wait for SSH")
-    p.add_argument("--run-timeout", type=int, default=10800,
-                   help="seconds to wait for a box to finish its tasks before dropping it")
+    p.add_argument("--run-timeout", type=int, default=18000,
+                   help="seconds to wait for a box to finish its tasks before dropping it; keep it "
+                        "under the workflow's own timeout-minutes so a slow box finishes rather than "
+                        "being guillotined mid-run")
     p.add_argument("--max-load-per-cpu", type=float, default=4.0,
                    help="reject a freshly booted host whose one minute load exceeds this times its CPU count")
     p.add_argument("--max-attempts", type=int, default=3,
