@@ -1718,8 +1718,8 @@ distclean: clean
 	$(RM) -f *.out
 	$(RM) -f brain.*
 	$(RM) -rf test_[0-9]*
-	$(RM) -rf tools/luks_tests
-	$(RM) -rf tools/luks2_tests
+	$(RM) -rf tools/test_modules/static/luks_tests
+	$(RM) -rf tools/test_modules/static/luks2_tests
 
 ##
 ## Targets: cross compilation (binary release version)

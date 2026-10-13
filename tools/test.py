@@ -3038,11 +3038,11 @@ CONTAINER_PASSWORD = b"hashcat"
 CONTAINER_MASK     = "hashca?l"
 CONTAINER_MASK_MID = "hashc?lt"
 
-TC_TESTS_DIR    = os.path.join(TDIR, "tc_tests")
-VC_TESTS_DIR    = os.path.join(TDIR, "vc_tests")
-LUKS_TESTS_DIR  = os.path.join(TDIR, "luks_tests")
-LUKS2_TESTS_DIR = os.path.join(TDIR, "luks2_tests")
-CL_TESTS_DIR    = os.path.join(TDIR, "cl_tests")
+TC_TESTS_DIR    = os.path.join(TDIR, "test_modules", "static", "tc_tests")
+VC_TESTS_DIR    = os.path.join(TDIR, "test_modules", "static", "vc_tests")
+LUKS_TESTS_DIR  = os.path.join(TDIR, "test_modules", "static", "luks_tests")
+LUKS2_TESTS_DIR = os.path.join(TDIR, "test_modules", "static", "luks2_tests")
+CL_TESTS_DIR    = os.path.join(TDIR, "test_modules", "static", "cl_tests")
 
 
 def container_attack(args):

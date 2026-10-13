@@ -52,8 +52,8 @@ libhashcat.so.*
 libhashcat.*.dylib
 hashcat.dll
 include/CL
-tools/luks_tests
-tools/luks2_tests
+tools/test_modules/static/luks_tests
+tools/test_modules/static/luks2_tests
 .vscode
 test_edge*
 

@@ -5,7 +5,7 @@
 ## License.....: MIT
 ##
 
-# End-to-end tests for the hash extractors, against the fixtures under tools/2hashcat_tests. Each
+# End-to-end tests for the hash extractors, against the fixtures under tools/test_modules/static. Each
 # fixture is a real container plus the hash line the extractor should print from it, so this catches
 # an extractor that stops parsing a format, which the per-mode crack tests in test.py do not: they
 # feed hashcat a hash the oracle made, not one an extractor pulled out of a real artifact.
@@ -22,8 +22,10 @@ import shutil
 import subprocess
 import sys
 
-TDIR  = os.path.dirname(os.path.abspath(__file__))
-TESTS = os.path.join(TDIR, "2hashcat_tests")
+TDIR   = os.path.dirname(os.path.abspath(__file__))
+# Every fixture is a checked-in container (or, for luks, a CI-fetched one) that doubles as a mode's
+# static test input, so they all live under the static test-input tree next to the static descriptors.
+STATIC = os.path.join(TDIR, "test_modules", "static")
 
 
 def hash_pairs(subdir, suffixes, replace_ext=False):
@@ -33,7 +35,7 @@ def hash_pairs(subdir, suffixes, replace_ext=False):
   # replace_ext. Walk so nested layouts (gpg's private-keys-v1.d) are covered.
   pairs = []
 
-  for root, _dirs, files in os.walk(os.path.join(TESTS, subdir)):
+  for root, _dirs, files in os.walk(os.path.join(STATIC, subdir)):
     for name in files:
       suffix = next((s for s in suffixes if name.endswith(s)), None)
 
@@ -148,29 +150,29 @@ SPECS = {
 SMOKE = {
   "truecrypt": {
     "need": tool("truecrypt2hashcat.py"),
-    "cases": [(container("tc_tests/hashcat_ripemd160_aes_boot.tc"),
+    "cases": [(container("test_modules/static/tc_tests/hashcat_ripemd160_aes_boot.tc"),
                lambda p: [sys.executable, tool("truecrypt2hashcat.py"), p], "$truecrypt$")],
   },
   "veracrypt": {
     "need": tool("veracrypt2hashcat.py"),
-    "cases": [(container("vc_tests/hashcat_blake2s_aes-twofish-serpent.vc"),
+    "cases": [(container("test_modules/static/vc_tests/hashcat_blake2s_aes-twofish-serpent.vc"),
                lambda p: [sys.executable, tool("veracrypt2hashcat.py"), p], "$veracrypt$")],
   },
   "luks": {
     "need": tool("luks2hashcat.py"),
-    "cases": [(container("luks_tests/hashcat_ripemd160_aes_cbc-essiv_128.luks"),
+    "cases": [(container("test_modules/static/luks_tests/hashcat_ripemd160_aes_cbc-essiv_128.luks"),
                lambda p: [sys.executable, tool("luks2hashcat.py"), p], "$luks$")],
   },
   "cryptoloop": {
     "need": tool("cryptoloop2hashcat.py"),
-    "cases": [(container("cl_tests/hashcat_ripemd160_aes_128.img"),
+    "cases": [(container("test_modules/static/cl_tests/hashcat_ripemd160_aes_128.img"),
                lambda p: [sys.executable, tool("cryptoloop2hashcat.py"), "--source", p,
                           "--hash", "ripemd160", "--cipher", "aes", "--keysize", "128"],
                "$cryptoapi$")],
   },
   "metamask": {
     "need": tool("metamask2hashcat.py"),
-    "cases": [(os.path.join(TESTS, "metamask", "metamask2hashcat.%s.json" % variant),
+    "cases": [(os.path.join(STATIC, "metamask", "metamask2hashcat.%s.json" % variant),
                lambda p: [sys.executable, tool("metamask2hashcat.py"), "--vault", p],
                "$metamaskMobile$")
               for variant in ("android", "ios")],
@@ -218,7 +220,7 @@ def run_spec(name, spec):
     else:
       bad += 1
       print("[ 2hashcat ] [ %s ] > Error : %s did not match %s"
-            % (name, os.path.relpath(src, TESTS), os.path.basename(expected)))
+            % (name, os.path.relpath(src, STATIC), os.path.basename(expected)))
 
   print("[ 2hashcat ] [ %s ] > %s : %d/%d matched" % (name, "OK" if bad == 0 else "Error", ok, ok + bad))
 
