@@ -6355,6 +6355,10 @@ def main():
                   help="print the container test modes (TrueCrypt, VeraCrypt, CryptoLoop, LUKS) and exit; "
                        "these crack a shipped or fetched container file and have no oracle, so a mode "
                        "list builder cannot find them from the test modules on disk")
+  ap.add_argument("--input-kinds", dest="input_kinds", action="store_true",
+                  help="print a JSON map of each mode to the test-input kinds it has (synthetic oracle, "
+                       "static shipped container, generated -g container) and exit; reads the source "
+                       "tree, needs no hashcat")
   ap.add_argument("--compute-sanitizer", dest="compute_sanitizer", nargs="?", const="memcheck",
                   default=None, metavar="TOOL",
                   help="run the CUDA kernels under NVIDIA Compute Sanitizer (memcheck|racecheck|"
@@ -6393,6 +6397,27 @@ def main():
   # on disk (they have no test module).
   if args.list_container_modes:
     print(" ".join(str(m) for m in sorted(CONTAINER_MODES)))
+    sys.exit(0)
+
+  # --input-kinds reports, per mode, which test-input kinds exist for it: a synthetic oracle, a
+  # static shipped container, or a generated (-g) container. It reads the source tree only, so it
+  # runs before any isolation or binary check. The example-hashes doc generator queries this instead
+  # of scanning the test_modules tree itself, so the three live next to the descriptors they report.
+  if args.input_kinds:
+    kinds = {}
+
+    for path in glob.glob(os.path.join(TDIR, "test_modules", "synthetic",
+                                       "m[0-9][0-9][0-9][0-9][0-9].py")):
+      mode = int(re.search(r"m0*([0-9]+)\.py$", path).group(1))
+      kinds.setdefault(mode, []).append("synthetic")
+
+    for mode in STATIC_FAMILY:
+      kinds.setdefault(mode, []).append("static")
+
+    for mode in DYNAMIC_FAMILY:
+      kinds.setdefault(mode, []).append("generated")
+
+    print(json.dumps({m: kinds[m] for m in sorted(kinds)}))
     sys.exit(0)
 
   # --compute-sanitizer points hashcat at the sweep shim, which wraps every run in

@@ -9,6 +9,7 @@ import sys
 import json
 import os
 import re
+import subprocess
 
 # Replace LUKS v1 and v2 hashes, they're too big: Github no longer shows the .md "(Sorry about that, but we can’t show files that are this big right now.)"
 EXAMPLE_HASH_REPLACEMENTS = {
@@ -31,6 +32,19 @@ EXAMPLE_HASH_REPLACEMENTS = {
 OPENCL_DIR = "../../OpenCL"
 MODULES_DIR = "../../src/modules"
 TESTS_DIR = "../../tools/test_modules"
+TESTPY = "../../tools/test.py"
+
+# The Test column shows, as a strip of three dots, which kinds of test input a mode has: a synthetic
+# oracle (the hash is computed from a password), a static container shipped in the repo, and a
+# generated container that tools/test.py -g builds on the fly and cracks end to end. A kind that is
+# present gets its colored dot (linked to the descriptor that proves it); a kind that is absent gets
+# a hollow circle, so every mode reads as the same three positions. test.py owns the descriptors, so
+# query it for the kinds rather than scanning the tree here and drifting from it.
+KIND_DOTS = [
+    ("synthetic", ":green_circle:",  "synthetic"),
+    ("static",    ":orange_circle:", "static"),
+    ("generated", ":red_circle:",    "dynamic"),
+]
 
 OPENCL_ABBREV = {
     "_a0-pure": "a0p",
@@ -101,71 +115,28 @@ def uses_hash_recipe(zfilled_key):
             return value == "module_hash_recipe;"
     return False
 
-def find_test(zfilled_key):
-    """Return markdown links for Perl tests"""
-    # List of TrueCrypt modes which have test containers
-    TC_MODES = [
-        "6211", "6212", "6213",
-        "6221", "6222", "6223",
-        "6231", "6232", "6233",
-        "6241", "6242", "6243",
-        "29311", "29312", "29313",
-        "29321", "29322", "29323",
-        "29331", "29332", "29333",
-        "29341", "29342", "29343"
-    ]
+def load_input_kinds():
+    """Ask test.py which test-input kinds each mode has, as {mode_str: [kinds]}. test.py reads the
+    per-mode descriptors, so it is the one place that knows which modes have a synthetic oracle, a
+    static container or a generated container; scanning the tree here would duplicate that."""
+    out = subprocess.run([sys.executable, TESTPY, "--input-kinds"],
+                         stdout=subprocess.PIPE, check=True).stdout
+    return json.loads(out)
 
-    # List of VeraCrypt modes which have test containers
-    VC_MODES = [
-        "13711", "13712", "13713",
-        "13721", "13722", "13723",
-        "13731", "13732", "13733",
-        "13741", "13742", "13743",
-        "13751", "13752", "13753",
-        "13761", "13762", "13763",
-        "13771", "13772", "13773",
-        "13781", "13782", "13783",
-        "29411", "29412", "29413",
-        "29421", "29422", "29423",
-        "29431", "29432", "29433",
-        "29441", "29442", "29443",
-        "29451", "29452", "29453",
-        "29461", "29462", "29463",
-        "29471", "29472", "29473",
-        "29481", "29482", "29483",
-        "29491", "29492", "29493"
-    ]
+def test_dots(key, zfilled_key, kinds):
+    """Render the mode's test-input kinds as a three-dot strip, one position per kind in KIND_DOTS
+    order. A present kind gets its colored dot linked to the descriptor that proves it; an absent
+    kind gets a hollow circle, so the column reads as the same three positions on every row."""
+    present = kinds.get(key, [])
+    cells = []
 
-    # List of LUKS modes which have test containers
-    LUKS_MODES = [
-        "14600",
-        "29511", "29512", "29513",
-        "29521", "29522", "29523",
-        "29531", "29532", "29533",
-        "29541", "29542", "29543"
-    ]
+    for kind, emoji, sub in KIND_DOTS:
+        if kind in present:
+            cells.append(f"[{emoji}](/{TESTS_DIR}/{sub}/m{zfilled_key}.py)")
+        else:
+            cells.append(":white_circle:")
 
-    # Cryptoloop mode which have test containers
-    CL_MODES = [
-        "14511", "14512", "14513",
-        "14521", "14522", "14523",
-        "14531", "14532", "14533",
-        "14541", "14542", "14543",
-        "14551", "14552", "14553"
-    ]
-
-    ALL_MODES = TC_MODES + VC_MODES + LUKS_MODES + CL_MODES
-
-    if zfilled_key in [m.zfill(5) for m in ALL_MODES]:
-        return f"[:white_check_mark:](/tools/test.py)"
-
-    if os.path.isdir(TESTS_DIR):
-        for filename in sorted(os.listdir(TESTS_DIR)):
-            if zfilled_key in filename:
-                return f"[:white_check_mark:](/{TESTS_DIR}/{filename})"
-
-    #test not found
-    return ":x:"
+    return " ".join(cells)
 
 def main():
     input_data = sys.stdin.read()
@@ -174,6 +145,8 @@ def main():
     except json.JSONDecodeError as e:
         sys.stderr.write(f"❌ Invalid JSON input: {e}\n")
         sys.exit(1)
+
+    kinds = load_input_kinds()
 
     footnote_map = {}
     footnote_counter = 1
@@ -216,19 +189,7 @@ def main():
 
         zfilled_key = key.zfill(5)
         opencl_links = find_opencl(zfilled_key)
-        test_link = find_test(zfilled_key)
-
-        # A mode whose test link points at test.py is one of the container modes: it is exercised
-        # only against a crypto container, so note that its test needs a shipped or freshly built
-        # container, not a hash the oracle makes from a password.
-        if test_link == "[:white_check_mark:](/tools/test.py)":
-            footnote_val = ("Tested only against a crypto container: a shipped test container or one "
-                            "built on the fly by tools/test.py. It has no example-hash oracle that "
-                            "runs without a container.")
-            if footnote_val not in footnote_map:
-                footnote_map[footnote_val] = footnote_counter
-                footnote_counter += 1
-            footnote += f"[^{footnote_map[footnote_val]}]"
+        test_link = test_dots(key, zfilled_key, kinds)
 
         # A recipe mode has no pure kernel files of its own: the pure path is compiled from a recipe
         # into the mode 4000 kernels, so find_opencl only sees the optimized kernels, or none. Add a
