@@ -90,7 +90,8 @@ def sha256_line(out):
 
 
 def tool(name):
-  return os.path.join(TDIR, name)
+  # The extractor scripts live in tools/2hashcat/; this harness stays in tools/ next to test.py.
+  return os.path.join(TDIR, "2hashcat", name)
 
 
 def container(rel):
@@ -109,8 +110,8 @@ def argv_from_file(script):
 # own calling convention be expressed.
 SPECS = {
   "gpg-ocb-aes": {
-    "need": os.path.join(TDIR, "gpg-ocb-aes2hashcat.py"),
-    "cmd": lambda src: [sys.executable, os.path.join(TDIR, "gpg-ocb-aes2hashcat.py"), src],
+    "need": tool("gpg-ocb-aes2hashcat.py"),
+    "cmd": lambda src: [sys.executable, tool("gpg-ocb-aes2hashcat.py"), src],
     "transform": plain,
     "pairs": lambda: hash_pairs("gpg-ocb-aes", (".key",)),
   },

@@ -269,7 +269,7 @@ cipher_cipher_mode=${cipher}-${cipher_mode}
 create_luks_container "$password" "$file" "$luks_type" "$cipher_cipher_mode" "$hash" "$keysize" "$size"
 
 
-${TDIR}/luks2hashcat.py $file | grep -vE '^[0-9]+$' > $file.hash
+${TDIR}/2hashcat/luks2hashcat.py $file | grep -vE '^[0-9]+$' > $file.hash
 
 if [[ ${hashcat_module} -eq "14600" ]]; then
   # the legacy format reads the container itself, so it has to survive

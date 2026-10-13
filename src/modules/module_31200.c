@@ -63,7 +63,7 @@ const char *module_st_pass        (MAYBE_UNUSED const hashconfig_t *hashconfig, 
 
 const char *module_usage_notice (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra)
 {
-  return "You can use https://github.com/hashcat/hashcat/blob/master/tools/veeamvbk2hashcat.py to extract the hashes";
+  return "You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/veeamvbk2hashcat.py to extract the hashes";
 }
 
 bool module_unstable_warning (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra, MAYBE_UNUSED const hc_device_param_t *device_param)

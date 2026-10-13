@@ -648,7 +648,7 @@ SELECT user, CONCAT('$mysql', SUBSTR(authentication_string,1,3), LPAD(CONV(SUBST
 [^19]: Module usage notice: `You can use https://github.com/sighook/pdf2hashcat to extract the hashes`
 [^20]: Example password: `$HEX[6a8aedccb7]`
 [^21]: Module usage notice: `You can use https://github.com/sighook/pdf2hashcat to extract the $pdf$ line. This mode also needs the 40 bit RC4 key appended to that line after a colon, which pdf2hashcat does not emit: crack the $pdf$ line with mode 10410 first to recover the key, then append it as ':<key>'.`
-[^22]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/gitea2hashcat.py to extract the hashes`
+[^22]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/gitea2hashcat.py to extract the hashes`
 [^23]: Module usage notice: `You can consider the second part as a 'salt'. If it is equal to 00000000, the CRC32 code will be considered as 'not salted'`
 [^24]: Module usage notice: `You can use https://github.com/philsmd/7z2hashcat to extract the hashes`
 [^25]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/shiro1-to-hashcat.py to extract the hashes`
@@ -656,36 +656,36 @@ SELECT user, CONCAT('$mysql', SUBSTR(authentication_string,1,3), LPAD(CONV(SUBST
 [^27]: Module usage notice: `PIM for example hash is 500`
 [^28]: Example password: `hashcat1`
 [^29]: Example password: `hashcat1hashcat1hashcat1`
-[^30]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/cryptoloop2hashcat.py to extract the hashes`
+[^30]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/cryptoloop2hashcat.py to extract the hashes`
 [^31]: Module usage notice: `The file https://hashcat.net/misc/example_hashes/hashcat_luks_testfiles.7z actually contains several examples of the different hash+cipher combinations. The password is stored in the pw file. That file is automatically used by tools/test.py`
 [^32]: Module usage notice: `You can use https://github.com/philsmd/itunes_backup2hashcat/ to extract the hashes from the Manifest.plist file`
 [^33]: Example password: `hashcat!!!`
 [^34]: Example password: `hashcat_hashcat_hashcat_hashcat_`
 [^35]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/securenotes2hashcat.pl to extract the hashes`
-[^36]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/apfs2hashcat.py`
+[^36]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/apfs2hashcat.py`
 [^37]: Example password: `5b13d4babb3714ccc62c9f71864bc984efd6a55f237c7a87fc2151e1ca658a9d`
 [^38]: Module usage notice: `You can use https://github.com/pwrbob/pgp2hc or the older https://github.com/openwall/john/blob/bleeding-jumbo/src/gpg2john.c to extract the hashes`
 [^39]: Example password: `8CdhZ2J8umrHg0tMjB0NDRDpKKFeL7i`
 [^40]: Example password: `Hashcat1!`
-[^41]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/gpg-ocb-aes2hashcat.py to extract the hashes`
-[^42]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/apfs2hashcat.py to extract the hashes`
+[^41]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/gpg-ocb-aes2hashcat.py to extract the hashes`
+[^42]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/apfs2hashcat.py to extract the hashes`
 [^43]: Example password: `t`
 [^44]: Module usage notice: `The full example password in output is 'hashcat', but input provided must be without the first 6 bytes (therefore it is just 't')`
 [^45]: Example password: `88f43854ae7b1624fc2ab7724859e795130f4843c7535729e819cf92f39535dc`
-[^46]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/bitlocker2hashcat.py to extract the hashes`
+[^46]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/bitlocker2hashcat.py to extract the hashes`
 [^47]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/aescrypt2hashcat.pl to extract the hashes`
-[^48]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/bitwarden2hashcat.py or the older https://github.com/0x6470/bitwarden2hashcat to extract the hashes`
-[^49]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/rar32hashcat.py to extract the hashes`
+[^48]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/bitwarden2hashcat.py or the older https://github.com/0x6470/bitwarden2hashcat to extract the hashes`
+[^49]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/rar32hashcat.py to extract the hashes`
 [^50]: Module usage notice: `You can use https://github.com/openwall/john/blob/bleeding-jumbo/run/pem2john.py to extract the hashes`
 [^51]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/pkcs12_to_hashcat.py to extract the hashes`
 [^52]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/sqlcipher2hashcat.pl to extract the hashes`
-[^53]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/mozilla2hashcat.py to extract the hashes`
-[^54]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/keybag2hashcat.py to extract the hashes`
-[^55]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/metamask2hashcat.py to extract the hashes`
+[^53]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/mozilla2hashcat.py to extract the hashes`
+[^54]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/keybag2hashcat.py to extract the hashes`
+[^55]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/metamask2hashcat.py to extract the hashes`
 [^56]: Example password: `b4b9b02e6f09a9bd760f388b67351e2b`
-[^57]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/vmwarevmx2hashcat.py to extract the hashes`
-[^58]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/virtualbox2hashcat.py to extract the hashes`
-[^59]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/exodus2hashcat.py to extract the hashes`
+[^57]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/vmwarevmx2hashcat.py to extract the hashes`
+[^58]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/virtualbox2hashcat.py to extract the hashes`
+[^59]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/exodus2hashcat.py to extract the hashes`
 [^60]: Example password: `KxhashcatxhXkULNJYF8Fu46G28SJrC7x2qwFtRuf38kVjkWxHg3`
 [^61]: Example password: `5KcL859EUnBDtVG76134U6DZWnVmpE996emJnWmTLRW2hashcat`
 [^62]: Example password: `KyhashcatpL2CQmMUDVMVuEXqdLSvfQ6TBjkUuyttSvBa7GMiuLi`
@@ -693,23 +693,23 @@ SELECT user, CONCAT('$mysql', SUBSTR(authentication_string,1,3), LPAD(CONV(SUBST
 [^64]: Example password: `L4hashcat7q6HMnMFcukyvxxVJvpabXYjxXLey8846NtWUyX4YLi`
 [^65]: Example password: `5JjDR424kMePbt5Uxnm2t1NizhdiVPcf8gCj68PQpP2ihashcat`
 [^66]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/radmin3_to_hashcat.pl to extract the hashes`
-[^67]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/truecrypt2hashcat.py to extract the hashes`
-[^68]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/veracrypt2hashcat.py to extract the hashes`
-[^69]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/luks2hashcat.py to extract the hashes`
+[^67]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/truecrypt2hashcat.py to extract the hashes`
+[^68]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/veracrypt2hashcat.py to extract the hashes`
+[^69]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/luks2hashcat.py to extract the hashes`
 [^70]: Example password: `127e6fbfe24a750e72930c220a8e138275656b8e5d8f48a98c3c92df2caba935`
-[^71]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/bisq2hashcat.py to extract the hashes`
+[^71]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/bisq2hashcat.py to extract the hashes`
 [^72]: Example password: `59887ec9920239bd45b6a9f82b7c4e024f80beaf887e5ee6aac5de0a899d3068`
 [^73]: Example password: `2006a306cf8f61c18c4e78e5fc0f5a7aa473b5ffb41f34344a32f8e042786fa1`
 [^74]: Example password: `4d1987d7a341d51557af59996845740135ab2506515426ada57cc8ec05adf794`
 [^75]: Example password: `25c9f8f734d87aacd9308705ca50b9819a57425ffbfae41cef869b19764d72c2`
 [^76]: Example password: `83b45ff8d85f37aafc05a8accd1f1cd5e50868b57e2ef0ef6f287bb4d8d17786`
 [^77]: Example password: `4c969ccc86d9e1f557b4ff1f19badc9a99718dd2aec8fcf66460612e05f5f7dd`
-[^78]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/veeamvbk2hashcat.py to extract the hashes`
-[^79]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/kremlin2hashcat.py to extract the hashes`
+[^78]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/veeamvbk2hashcat.py to extract the hashes`
+[^79]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/kremlin2hashcat.py to extract the hashes`
 [^80]: Example password: `hashc`
 [^81]: Example password: `hashcat12`
 [^82]: Example password: `hashcat123456`
-[^83]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/cachedata2hashcat.py to extract the hashes`
+[^83]: Module usage notice: `You can use https://github.com/hashcat/hashcat/blob/master/tools/2hashcat/cachedata2hashcat.py to extract the hashes`
 [^84]: Module usage notice: `You can use https://github.com/openwall/john/blob/bleeding-jumbo/src/keepass2john.c to extract the hashes`
 [^85]: Example password: `IOIO13`
 [^86]: Example password: `testpass`
@@ -719,6 +719,6 @@ SELECT user, CONCAT('$mysql', SUBSTR(authentication_string,1,3), LPAD(CONV(SUBST
 [^90]: Example password: `$HEX[1ff589b2e1]`
 [^91]: Example password: ` N@B`
 [^92]: Example password: `hashcat01852`
-[^93]: Module usage notice: `Use tools/routeros2hashcat.py to extract hashes from RouterOS .backup files, unpacked config directories, or NAND flash config stores`
+[^93]: Module usage notice: `Use tools/2hashcat/routeros2hashcat.py to extract hashes from RouterOS .backup files, unpacked config directories, or NAND flash config stores`
 [^94]: Example password: `po99oo`
 [^95]: Module usage notice: `Extract $dmg$3 hashes with dmg2john from John the Ripper PR #6029 (https://github.com/openwall/john/pull/6029) until it is merged into bleeding-jumbo`

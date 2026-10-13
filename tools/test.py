@@ -3055,9 +3055,9 @@ def container_attack(args):
 
 
 def container_extract(tool, container, hash_file, extra_args=()):
-  # Run one of the tools/*2hashcat.py extractors and capture the hash it prints into hash_file, the
+  # Run one of the tools/2hashcat/*2hashcat.py extractors and capture the hash it prints into hash_file, the
   # way test.sh does with `eval "...2hashcat.py" "<container>" > <hashfile>`. Returns True on success.
-  proc = subprocess.run([sys.executable, os.path.join(TDIR, tool), container] + list(extra_args),
+  proc = subprocess.run([sys.executable, os.path.join(TDIR, "2hashcat", tool), container] + list(extra_args),
                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
   if proc.returncode != 0 or not proc.stdout:
@@ -3370,7 +3370,7 @@ def container_cryptoloop(args, mode, width, tmp):
 
     hash_arg = os.path.join(tmp, "hashcat_%s_%s_%s.hash" % (hfun, cipher, ksize))
 
-    proc = subprocess.run([sys.executable, os.path.join(TDIR, "cryptoloop2hashcat.py"),
+    proc = subprocess.run([sys.executable, os.path.join(TDIR, "2hashcat", "cryptoloop2hashcat.py"),
                            "--source", img, "--hash", hfun, "--cipher", cipher, "--keysize", ksize],
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
@@ -3974,11 +3974,11 @@ def gen_pkzip(args, mode, tmp):
 
 def gen_gpg(args, mode, tmp):
   # Real GPG secret keys. gpg1 (GnuPG 1.4) does the classic CFB S2K variants directly; gpg (2.x) does
-  # the default key and, for 17050, the on-disk OCB layout, read with tools/gpg-ocb-aes2hashcat.py.
+  # the default key and, for 17050, the on-disk OCB layout, read with tools/2hashcat/gpg-ocb-aes2hashcat.py.
   gpg1    = os.environ.get("GPG1_BIN", "gpg1")
   gpg2    = os.environ.get("GPG2_BIN", "gpg")
   gpg2john = _tool("GPG2JOHN", "gpg2john")
-  ocb     = os.environ.get("GPG_OCB_EXTRACT", os.path.join(TDIR, "gpg-ocb-aes2hashcat.py"))
+  ocb     = os.environ.get("GPG_OCB_EXTRACT", os.path.join(TDIR, "2hashcat", "gpg-ocb-aes2hashcat.py"))
 
   if not _have(gpg2john):
     gen_skip(mode, "gpg2john not found (set GPG2JOHN=/path/to/gpg2john)")

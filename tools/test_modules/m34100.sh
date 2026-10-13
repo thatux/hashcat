@@ -134,7 +134,7 @@ create_luks_container "$password" "$file" luks2 "$cipher" sha256 "$size" \
   --pbkdf-memory "$((memory * 1024))" \
   --pbkdf-parallel "$threads"
 
-${TDIR}/luks2hashcat.py $file | grep -vE '^[0-9]+$' > $file.hash
+${TDIR}/2hashcat/luks2hashcat.py $file | grep -vE '^[0-9]+$' > $file.hash
 
 # the caller is handed the extracted hash, so the container is 20 MiB of dead weight
 # from here on. Without this a suite run leaves one image per generated vector behind

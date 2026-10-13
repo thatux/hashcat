@@ -51,7 +51,7 @@ const char *module_st_pass        (MAYBE_UNUSED const hashconfig_t *hashconfig, 
 
 const char *module_usage_notice (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra)
 {
-  return "Use tools/routeros2hashcat.py to extract hashes from RouterOS .backup files, unpacked config directories, or NAND flash config stores";
+  return "Use tools/2hashcat/routeros2hashcat.py to extract hashes from RouterOS .backup files, unpacked config directories, or NAND flash config stores";
 }
 
 typedef struct mikrotik_ecsrp5_tmp
