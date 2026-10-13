@@ -34,17 +34,19 @@ MODULES_DIR = "../../src/modules"
 TESTS_DIR = "../../tools/test_modules"
 TESTPY = "../../tools/test.py"
 
-# The Test column shows, as a strip of three dots, which kinds of test input a mode has: a synthetic
-# oracle (the hash is computed from a password), a static container shipped in the repo, and a
-# generated container that tools/test.py -g builds on the fly and cracks end to end. A kind that is
-# present gets its colored dot (linked to the descriptor that proves it); a kind that is absent gets
-# a hollow circle, so every mode reads as the same three positions. test.py owns the descriptors, so
-# query it for the kinds rather than scanning the tree here and drifting from it.
+# The Test column shows three dots per mode, one for each kind of test input: a synthetic oracle
+# (the hash is computed from a password), a static container shipped in the repo, and a container
+# that tools/test.py -g builds on the fly and cracks end to end. A kind the mode has is green; a kind
+# that is relevant to the mode's format but missing is red (a coverage gap); a kind that does not
+# apply to the mode is a dash. Relevance follows the format: a container or archive mode (one that
+# has a static or generated input) can carry all three kinds, a plain hash mode can only carry the
+# oracle. test.py owns the descriptors, so query it for the kinds rather than scanning the tree here.
 KIND_DOTS = [
-    ("synthetic", ":green_circle:",  "synthetic"),
-    ("static",    ":orange_circle:", "static"),
-    ("generated", ":red_circle:",    "dynamic"),
+    ("synthetic", "synthetic"),
+    ("static",    "static"),
+    ("generated", "dynamic"),
 ]
+NA_DOT = "-"
 
 OPENCL_ABBREV = {
     "_a0-pure": "a0p",
@@ -124,17 +126,21 @@ def load_input_kinds():
     return json.loads(out)
 
 def test_dots(key, zfilled_key, kinds):
-    """Render the mode's test-input kinds as a three-dot strip, one position per kind in KIND_DOTS
-    order. A present kind gets its colored dot linked to the descriptor that proves it; an absent
-    kind gets a hollow circle, so the column reads as the same three positions on every row."""
-    present = kinds.get(key, [])
+    """Render the mode's test coverage as three dots, one per kind in KIND_DOTS order. A kind the
+    mode has is a green dot linked to its descriptor; a kind that is relevant to the mode's format
+    but absent is a red dot (a gap); a kind that does not apply is a dash. A container or archive
+    mode (it has a static or generated input) can carry all three kinds; a plain hash mode can only
+    carry the synthetic oracle, so its container kinds read as dashes rather than gaps."""
+    present = set(kinds.get(key, []))
+    container_or_archive = bool(present & {"static", "generated"})
     cells = []
 
-    for kind, emoji, sub in KIND_DOTS:
+    for kind, sub in KIND_DOTS:
         if kind in present:
-            cells.append(f"[{emoji}](/{TESTS_DIR}/{sub}/m{zfilled_key}.py)")
+            cells.append(f"[:green_circle:](/{TESTS_DIR}/{sub}/m{zfilled_key}.py)")
         else:
-            cells.append(":white_circle:")
+            relevant = (not container_or_archive) if kind == "synthetic" else container_or_archive
+            cells.append(":red_circle:" if relevant else NA_DOT)
 
     return " ".join(cells)
 
