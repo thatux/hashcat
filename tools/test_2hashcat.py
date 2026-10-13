@@ -16,6 +16,7 @@
 # is reported as a Skip, not a failure, so coverage follows the environment (the tiered-fixture
 # approach): a present tool is tested, an absent one is named and skipped.
 
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -123,6 +124,19 @@ SPECS = {
     "transform": sha256_line,
     "pairs": lambda: hash_pairs("gitea", (".giteahash",)),
   },
+  "mozilla": {
+    "need": tool("mozilla2hashcat.py"),
+    "needs_module": "pyasn1",  # mozilla2hashcat.py parses the NSS key DB with pyasn1
+    "cmd": lambda src: [sys.executable, tool("mozilla2hashcat.py"), src],
+    "transform": plain,  # the hash is on stdout; the detected mode is printed to stderr
+    "pairs": lambda: hash_pairs("mozilla", (".db",)),
+  },
+  "rar3": {
+    "need": tool("rar32hashcat.py"),
+    "cmd": lambda src: [sys.executable, tool("rar32hashcat.py"), src],
+    "transform": plain,  # a single compressed entry yields one $RAR3$ line on stdout
+    "pairs": lambda: hash_pairs("rar3", (".rar",)),
+  },
 }
 
 
@@ -174,6 +188,13 @@ def have(need):
 def run_spec(name, spec):
   if not have(spec["need"]):
     print("[ 2hashcat ] [ %s ] > Skip : extractor %s not present" % (name, spec["need"]))
+
+    return 0
+
+  need_mod = spec.get("needs_module")
+
+  if need_mod and importlib.util.find_spec(need_mod) is None:
+    print("[ 2hashcat ] [ %s ] > Skip : Python module %s not installed" % (name, need_mod))
 
     return 0
 
