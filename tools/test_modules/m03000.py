@@ -5,31 +5,12 @@
 ## License.....: MIT
 ##
 
-from Crypto.Cipher import DES
-
-from lib.des_key import setup_des_key
-from lib.test_helpers import split_hash_word
-
-# LM: DES of KGS!@#$% keyed with the upper cased password, zero padded. The password is at most 7
-# characters here, so the first half is the whole hash.
-
-
-def module_constraints():
-  return [[1, 7], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
-
-
-def module_generate_hash(word, salt, iterations=None):
-  key = (word.upper() + b"\x00" * 14)[:7]
-
-  return DES.new(setup_des_key(key), DES.MODE_ECB).encrypt(b"KGS!@#$%").hex()
-
-
-def module_verify_hash(line):
-  parts = split_hash_word(line)
-
-  if parts is None:
-    return None
-
-  _, word = parts
-
-  return (module_generate_hash(word, None), word)
+# Test profile: the per-mode test-harness parameters test.py reads instead of hardcoding them.
+TEST_PROFILE = {
+    # LM caps the password at 7 bytes (module_constraints [1, 7]), so the attack_6 and attack_7
+    # multi length windows stop at 8 rather than the default 9.
+    "a6_multi_max": 8,
+    "a7_multi_max": 8,
+    # Lengths 2 through 7 give 6 distinct multi length slots, so the attack_1 multi batch covers 6.
+    "combinator_multi_offset": 6,
+}

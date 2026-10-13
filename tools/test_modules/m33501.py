@@ -5,63 +5,15 @@
 ## License.....: MIT
 ##
 
-from Crypto.Cipher import ARC4
-
-from lib.test_helpers import random_number, random_string, split_hash_word
-
-# RC4 72 bit with a partially known plaintext. The password is the 9 byte RC4 key. After dropping
-# dropN keystream bytes the plaintext is encrypted; the hash keeps the ciphertext and the first 5
-# bytes of the plaintext.
-
-
-def module_constraints():
-  return [[-1, -1], [-1, -1], [9, 9], [-1, -1], [-1, -1]]
-
-
-def module_generate_hash(word, dropN=None, ciphertext=None, plaintext_offset=None, plaintext=None):
-  if plaintext is None or dropN is None:
-    dropN = random_number(0, 512)
-    plaintext = random_string(random_number(5, 64)).encode("latin-1")
-
-  drop_n = int(dropN)
-
-  cipher = ARC4.new(word)
-
-  if drop_n > 0:
-    cipher.encrypt(b"\x00" * drop_n)
-
-  digest = cipher.encrypt(plaintext).hex()
-
-  if ciphertext is not None:
-    if ciphertext[:10] == digest:
-      digest = ciphertext
-
-  return "$rc4$72$%d$%s$0$%s" % (drop_n, digest, plaintext.hex()[:10])
-
-
-def module_verify_hash(line):
-  res = split_hash_word(line)
-
-  if res is None:
-    return None
-
-  hash_str, word = res
-
-  if hash_str[:8] != "$rc4$72$":
-    return None
-
-  data = hash_str.split("$")
-
-  if len(data) != 7:
-    return None
-
-  dropN = data[3]
-  ciphertext = data[4]
-  plaintext_offset = data[5]
-
-  try:
-    plaintext = bytes.fromhex(data[6])
-  except ValueError:
-    return None
-
-  return (module_generate_hash(word, dropN, ciphertext, plaintext_offset, plaintext), word)
+# Test profile: the per-mode test-harness parameters test.py reads instead of hardcoding them.
+TEST_PROFILE = {
+    # The candidate is the 9 byte RC4 key, the only length the oracle makes, so every multi length
+    # slot is pinned to 9. The split keeps a 5 byte head so the hybrid masks still have a tail.
+    "multi_min_len": 5,
+    "multi_fixed_len": 9,
+    # The candidate is only a few characters once a multibyte byte is folded in, so a head of 8
+    # would cover the whole word and leave the attack_6 mask empty. Start the multi at slot 5 so the
+    # head stays short enough that every slot still has a tail for the mask.
+    "a6_multi_min": 5,
+    "a7_multi_max": 3,      # keep the attack_7 brute-forced head to the shortest window
+}

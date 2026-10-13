@@ -14,8 +14,10 @@
 # into source, a command line or a format string, so a quote, a dollar or a percent in it means
 # nothing anywhere on the path.
 
+import ast
 import glob
 import importlib
+import json
 import os
 import random
 import re
@@ -23,7 +25,13 @@ import sys
 
 TDIR = os.path.dirname(os.path.abspath(__file__))
 
+# test_modules holds the flat per-mode files and the shared lib package; synthetic holds a mode's
+# oracle once it has been split out from its flat profile file. synthetic is searched first so a
+# migrated mode imports its oracle from there, while a mode not yet split still imports from the flat
+# file, and both reach lib through test_modules. This lets the input-kind restructure proceed mode by
+# mode without a flag day.
 sys.path.insert(0, os.path.join(TDIR, "test_modules"))
+sys.path.insert(0, os.path.join(TDIR, "test_modules", "synthetic"))
 
 from lib import test_helpers  # noqa: E402
 from lib.test_helpers import random_number, random_numeric_string  # noqa: E402
@@ -269,6 +277,8 @@ def usage_exit():
     " {0} passthrough <mode> [iter]\n"
     " {0} potthrough  <mode> [iter]\n"
     " {0} verify      <mode> <hashfile> <cracksfile> <outfile>\n"
+    " {0} describe    <mode>\n"
+    " {0} constraints <mode>\n"
     "\n".format(name))
 
   sys.exit(1)
@@ -281,6 +291,28 @@ def load_module(mode):
     return importlib.import_module(name)
   except Exception as exc:
     sys.exit("Could not load test module: %s.py\n%s" % (name, exc))
+
+
+def read_test_profile(mode):
+  # The mode's TEST_PROFILE, read from the flat tools/test_modules/mNNNNN.py as a top-level literal
+  # without importing, so it is available whether or not the oracle has been split into synthetic/
+  # and even when the oracle's own imports are missing. Absent means an empty profile.
+  path = os.path.join(TDIR, "test_modules", "m%05d.py" % mode)
+
+  if not os.path.isfile(path):
+    return {}
+
+  with open(path) as fh:
+    tree = ast.parse(fh.read())
+
+  for node in tree.body:
+    if not isinstance(node, ast.Assign):
+      continue
+
+    if any(isinstance(t, ast.Name) and t.id == "TEST_PROFILE" for t in node.targets):
+      return ast.literal_eval(node.value)
+
+  return {}
 
 
 def constraints(mod):
@@ -791,7 +823,7 @@ def main():
 
   kind, mode = argv[0], argv[1]
 
-  if kind not in ("edge", "single", "spare", "password", "passthrough", "potthrough", "verify"):
+  if kind not in ("edge", "single", "spare", "password", "passthrough", "potthrough", "verify", "describe", "constraints"):
     usage_exit()
 
   if not mode.isdigit():
@@ -810,11 +842,34 @@ def main():
 
     IS_OPTIMIZED = argv[3] != "0"
 
+  if kind == "describe":
+    # The test profile is the single source of truth for the per-mode test quirks test.py once
+    # hardcoded. It lives in the flat tools/test_modules/mNNNNN.py as a top-level TEST_PROFILE dict,
+    # read here without importing so it works whether or not the mode's oracle has been split into
+    # synthetic/, and so a mode whose oracle needs an absent library still describes. A module with
+    # nothing to declare describes as an empty object.
+    if len(argv) != 2:
+      usage_exit()
+
+    print(json.dumps(read_test_profile(mode), sort_keys=True, indent=2))
+
+    return
+
   mod = load_module(mode)
 
   for hook in ("module_constraints", "module_generate_hash", "module_verify_hash"):
     if not hasattr(mod, hook):
       sys.exit("Module function '%s' not found\n" % hook)
+
+  if kind == "constraints":
+    # The oracle's declared length and salt ranges, as the password-length cross-check reads them to
+    # compare the word-length minimum against what the C module reports through --hash-info.
+    if len(argv) != 2:
+      usage_exit()
+
+    print(json.dumps(mod.module_constraints()))
+
+    return
 
   global NON_ASCII_OK
 

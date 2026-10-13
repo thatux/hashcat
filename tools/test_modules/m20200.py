@@ -5,18 +5,9 @@
 ## License.....: MIT
 ##
 
-from lib import passlib_pbkdf2
-
-# Python passlib pbkdf2-sha512, see lib/passlib_pbkdf2.py.
-
-
-def module_constraints():
-  return [[0, 256], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
-
-
-def module_generate_hash(word, salt, iterations=None):
-  return passlib_pbkdf2.generate_hash("$pbkdf2-sha512$", "sha512", word, salt.encode("latin-1") if salt else None, iterations)
-
-
-def module_verify_hash(line):
-  return passlib_pbkdf2.verify_hash("$pbkdf2-sha512$", "sha512", line)
+# Test profile: the per-mode test-harness parameters test.py reads instead of hardcoding them.
+TEST_PROFILE = {
+    # -HH reports same-salt is not allowed for this mode, but the edge suite runs it with a
+    # shared salt anyway (test_edge.sh SKIP_SAME_SALT_HASH_TYPES).
+    "edge_skip_same_salt": True,
+}

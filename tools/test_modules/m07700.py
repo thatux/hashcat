@@ -5,29 +5,10 @@
 ## License.....: MIT
 ##
 
-from lib import sap
-
-# SAP CODVN B (BCODE), see lib/sap.py.
-
-
-def module_constraints():
-  return [[-1, -1], [-1, -1], [0, 8], [1, 12], [0, 55]]
-
-
-def module_generate_hash(word, salt, iterations=None):
-  salt = salt.upper()
-
-  a, b = sap.bcode(word, salt.encode())
-
-  return "%s$%08X%08X" % (salt, a, b)
-
-
-def module_verify_hash(line):
-  parts = sap.split_line(line)
-
-  if parts is None:
-    return None
-
-  salt, word = parts
-
-  return (module_generate_hash(word, salt.decode()), word)
+# Test profile: the per-mode test-harness parameters test.py reads instead of hardcoding them.
+TEST_PROFILE = {
+    # SAP CODVN B caps the password at 8 bytes, so the attack_6 and attack_7 multi length windows
+    # stop at 8 rather than the default 9.
+    "a6_multi_max": 8,
+    "a7_multi_max": 8,
+}

@@ -5,61 +5,20 @@
 ## License.....: MIT
 ##
 
-import hashlib
-import hmac
-
-from lib.test_helpers import random_bytes, random_number
-
-# WPA-PMKID-PBKDF2: the PMK is PBKDF2-HMAC-SHA1 of the passphrase over the ESSID, and the PMKID is
-# the first half of HMAC-SHA1 of "PMK Name", the AP MAC and the station MAC.
-#
-# The perl module refused to verify, because hashcat prints a cracked PMKID with * rather than :
-# between the fields. This one takes either, which is also what the python engine's round trip
-# check needs.
-
-
-def module_constraints():
-  return [[8, 63], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
-
-
-def module_generate_hash(word, salt, iterations=None, macap=None, macsta=None, essid=None):
-  if macap is None:
-    macap = random_bytes(6).hex()
-
-  if macsta is None:
-    macsta = random_bytes(6).hex()
-
-  if essid is None:
-    essid = random_bytes(random_number(0, 32) & 0x1e).hex()
-
-  pmk = hashlib.pbkdf2_hmac("sha1", word, bytes.fromhex(essid), 4096, 32)
-
-  pmkid = hmac.new(pmk, b"PMK Name" + bytes.fromhex(macap) + bytes.fromhex(macsta), hashlib.sha1).hexdigest()
-
-  return "%s:%s:%s:%s" % (pmkid[:32], macap, macsta, essid)
-
-
-def module_verify_hash(line):
-  for sep in (b":", b"*"):
-    data = line.split(sep, 3)
-
-    if len(data) != 4:
-      continue
-
-    tail = data[3].split(b":", 1)
-
-    if len(tail) != 2:
-      continue
-
-    _, macap, macsta = (d.decode(errors="replace") for d in data[:3])
-
-    essid, word = tail[0].decode(errors="replace"), tail[1]
-
-    try:
-      new_hash = module_generate_hash(word, None, None, macap, macsta, essid)
-    except ValueError:
-      return None
-
-    return (new_hash if sep == b":" else new_hash.replace(":", "*"), word)
-
-  return None
+# Test profile: the per-mode test-harness parameters test.py reads instead of hardcoding them.
+TEST_PROFILE = {
+    # WPA/WPA2 PSK carries an 8 byte minimum passphrase (module_constraints [8, 63]). Every cap
+    # here follows from that length floor: the short-candidate pool shrinks the single-hash index
+    # ranges, and the mask window starts at 8.
+    "a3_single_max": 7,            # attack_3 single covers 7 of the short candidates, not 8
+    "a3_multi_increment": [8, 9],  # attack_3 multi --increment window starts at the 8 byte floor
+    "a3_custom_charsets": True,    # attack_3 multi pins the mask to a custom charset at bytes 6..9
+    "a6_single": [1, 6],           # attack_6 single hash index range (min, max)
+    "a7_single": [1, 5, 0],        # attack_7 single (min, max, mask_offset); no custom split
+    "combinator_init": [1, 7],     # init() (init_min, min_offset); split shifts toward the tail
+    "multi_min_len": 7,            # init() multi split offset 7, keeping the masked tail short
+    "a6_multi_max": 5,             # slow PBKDF2 mode: keep the attack_6 multi length window short
+    "a7_multi_max": 5,             # slow PBKDF2 mode: keep the attack_7 multi length window short
+    "a12_single_max": 6,           # attack_12 single covers 6 of the short candidates
+    "match_pass_only": True,       # recovered line omits the hash, so the match is on ":password"
+}

@@ -5,76 +5,9 @@
 ## License.....: MIT
 ##
 
-import hashlib
-
-from lib.test_helpers import split_hash_word
-
-# phpass, WordPress (MD5), Joomla (MD5), phpBB3 (MD5): 2^cost rounds of md5 over the last digest and
-# the password, starting from md5 of the salt and the password. A line being verified keeps its own
-# $P$ or $H$.
-
-ITOA64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-
-
-def encode64(raw):
-  out = ""
-
-  i = 0
-
-  while i < len(raw):
-    v = raw[i]
-    i += 1
-
-    out += ITOA64[v & 0x3f]
-
-    if i < len(raw):
-      v |= raw[i] << 8
-
-    out += ITOA64[(v >> 6) & 0x3f]
-
-    if i >= len(raw):
-      break
-
-    i += 1
-
-    if i < len(raw):
-      v |= raw[i] << 16
-
-    out += ITOA64[(v >> 12) & 0x3f]
-
-    if i >= len(raw):
-      break
-
-    i += 1
-
-    out += ITOA64[(v >> 18) & 0x3f]
-
-  return out
-
-
-def module_constraints():
-  return [[0, 256], [8, 8], [0, 39], [8, 8], [-1, -1]]
-
-
-def module_generate_hash(word, salt, iterations=None):
-  cost = 11 if iterations is None or iterations == "" else int(iterations)
-
-  digest = hashlib.md5(salt.encode() + word).digest()
-
-  for _ in range(1 << cost):
-    digest = hashlib.md5(digest + word).digest()
-
-  return "$P$" + ITOA64[cost] + salt + encode64(digest)
-
-
-def module_verify_hash(line):
-  parts = split_hash_word(line)
-
-  if parts is None:
-    return None
-
-  hash_in, word = parts
-
-  new_hash = module_generate_hash(word, hash_in[4:12], ITOA64.find(hash_in[3:4]))
-
-  return (hash_in[:3] + new_hash[3:], word)
+# Test profile: the per-mode test-harness parameters test.py reads instead of hardcoding them.
+TEST_PROFILE = {
+    # Run as a fast hash on purpose, to cover the AMP kernel, even though its slow-hash cost would
+    # otherwise put it on the slow-mode attack path.
+    "force_fast": True,
+}

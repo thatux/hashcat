@@ -467,21 +467,8 @@ RUNTIME    = 400    # hashcat --runtime, as test.sh sets it
 
 # A binary-hashfile mode (OPTS_TYPE_BINARY_HASHFILE) is handed a file, not a hash string, so the
 # oracle prints the file base64 encoded and the manager decodes it back to a file (test.sh).
-# For those, and for the two encoding exceptions, the recovered line does not carry the
-# hash we started from, so the match is on ":password" alone (test.sh PASS_ONLY).
-
-NOCHECK_ENCODING = {16800, 16801, 22000}
-
-# Modes whose only kernel is the mask attack (mfulc 37000 ships m37000_a3-pure.cl and nothing else),
-# so every other attack has no kernel to run and is left out rather than failing on a missing file.
-
-MASK_ONLY_MODES = {37000}
-
-# MIFARE Ultralight C 3DES key recovery: the key recovery is not unique, so hashcat may recover a
-# different valid 4 byte segment than the oracle used. Its crack is scored by the hash appearing in
-# the output, whatever segment was printed with it.
-
-MFULC_MODES = {37000}
+# For those, and for a mode that sets match_pass_only in its profile, the recovered line does not
+# carry the hash we started from, so the match is on ":password" alone (test.sh PASS_ONLY).
 
 # The LUKS modes whose hashes are container paths, not the generator's own output. whole_word_vectors
 # leaves their -a 4 list alone (test.sh); 10300 takes its hash from another field and is excluded
@@ -501,11 +488,9 @@ SELFTEST_MODES = {23800}
 
 SELFTEST_RUNTIME = 60
 
-# Modes with no meaningful self-test crack: 2000 and 99999 are Plaintext passthrough modes (STDOUT),
-# and 14600 is LUKS, whose example hash is N/A and lives in external container files. The sweep still
-# runs them and prints their line, but does not count them as cracked or as a failure. test.sh keeps
-# the same set (selftest_vector_sweep), so the two stay comparable.
-NO_SELFTEST = {2000, 14600, 99999}
+# A mode sets no_selftest in its profile when it has no meaningful self-test crack. The sweep still
+# runs it and prints its line but does not count it as cracked or as a failure; the reason lives next
+# to the flag in the mode's module.
 
 # test.sh's attack order for -a all (test.sh). A slow mode only runs the attacks that
 # cost one candidate per word (the whole word attacks), so it gets 0, 4, 8 and 9 and nothing else,
@@ -514,12 +499,9 @@ NO_SELFTEST = {2000, 14600, 99999}
 ATTACK_ORDER = [0, 4, 8, 9, 1, 3, 6, 7, 12]
 WHOLE_WORD   = (0, 4, 8, 9)
 
-# SLOW_ALGOS is every module with ATTACK_EXEC_OUTSIDE_KERNEL plus these, whose generated passwords
-# the mask attacks cannot express (test.sh). 400 is run as a fast hash on purpose, to cover
-# the AMP kernel (test.sh).
-
-FAKE_SLOW = {28501, 28502, 28503, 28504, 28505, 28506, 30901, 30902, 30903, 30904, 30905, 30906,
-             34700}
+# SLOW_ALGOS is every module with ATTACK_EXEC_OUTSIDE_KERNEL plus the modes that set fake_slow in
+# their profile, whose generated passwords the mask attacks cannot express (the reason lives next to
+# the flag in each module). 400 is run as a fast hash on purpose, to cover the AMP kernel (test.sh).
 
 # The oracle writes one shell line per vector: echo <word> | ./hashcat ${OPTS} -a 0 -m <n> '<h>'.
 # The word is padded to 31 with trailing spaces by the "%-31s" the oracle uses; the hash is single
@@ -675,10 +657,14 @@ def require_device_type(device, ids):
 
 
 def discover_modes():
+  # A mode is discoverable from its flat profile file or its synthetic oracle, whichever it has: a
+  # mode with a profile keeps a flat tools/test_modules/mNNNNN.py, a mode without one keeps only
+  # synthetic/mNNNNN.py once its oracle is split out, and most keep both.
   out = []
 
-  for path in glob.glob(os.path.join(TDIR, "test_modules", "m[0-9][0-9][0-9][0-9][0-9].py")):
-    out.append(int(re.search(r"m0*([0-9]+)\.py$", path).group(1)))
+  for sub in ("", "synthetic"):
+    for path in glob.glob(os.path.join(TDIR, "test_modules", sub, "m[0-9][0-9][0-9][0-9][0-9].py")):
+      out.append(int(re.search(r"m0*([0-9]+)\.py$", path).group(1)))
 
   return sorted(set(out))
 
@@ -765,7 +751,11 @@ def module_opts(mode):
 
   opts = []
 
-  path = os.path.join(TDIR, "test_modules", "m%05d.py" % mode)
+  # HASHCAT_ARGS is a top-level in the oracle, so read it from synthetic/ once the oracle is split
+  # out, falling back to the flat file for a mode that is not split yet.
+  syn  = os.path.join(TDIR, "test_modules", "synthetic", "m%05d.py" % mode)
+  flat = os.path.join(TDIR, "test_modules", "m%05d.py" % mode)
+  path = syn if os.path.isfile(syn) else flat
 
   if os.path.isfile(path):
     with open(path) as f:
@@ -786,6 +776,41 @@ def module_opts(mode):
 
 
 MODULE_OPTS_CACHE = {}
+
+
+def profile(mode):
+  # The per-mode test profile: the declarative parameters test.py used to hardcode in if-mode
+  # ladders and frozen sets, now owned by the mode's own module as a top-level TEST_PROFILE dict.
+  # Read from the source rather than imported, for the same reason module_opts does: the profile is
+  # plain data with no dependency of its own, but importing the module would run the oracle's
+  # top-level imports, which may not be installed. A mode with no profile means all defaults, so an
+  # empty dict, and every caller reads it with .get(key, default).
+  if mode in PROFILE_CACHE:
+    return PROFILE_CACHE[mode]
+
+  result = {}
+
+  path = os.path.join(TDIR, "test_modules", "m%05d.py" % mode)
+
+  if os.path.isfile(path):
+    with open(path) as f:
+      tree = ast.parse(f.read())
+
+    for node in tree.body:
+      if isinstance(node, ast.Assign) is False:
+        continue
+
+      names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+
+      if "TEST_PROFILE" in names:
+        result = ast.literal_eval(node.value)
+
+  PROFILE_CACHE[mode] = result
+
+  return result
+
+
+PROFILE_CACHE = {}
 
 
 def bridge_opts(mode):
@@ -837,15 +862,15 @@ def device_for(args, mode):
 
 
 def is_slow(mode):
-  if mode == 400:
+  if profile(mode).get("force_fast"):
     return False
 
-  return mode in FAKE_SLOW or b"ATTACK_EXEC_OUTSIDE_KERNEL" in module_source(mode)
+  return profile(mode).get("fake_slow") or b"ATTACK_EXEC_OUTSIDE_KERNEL" in module_source(mode)
 
 
 def host_engine(mode):
   # test.sh HOST_ENGINE_ALGOS is the plain ATTACK_EXEC_OUTSIDE_KERNEL set (test.sh), taken before
-  # the fake-slow additions, so it is read straight off the module and does not carry FAKE_SLOW.
+  # the fake-slow additions, so it is read straight off the module and does not carry fake_slow.
 
   return b"ATTACK_EXEC_OUTSIDE_KERNEL" in module_source(mode)
 
@@ -854,7 +879,7 @@ def is_timeout(mode):
   # test.sh TIMEOUT_ALGOS is SLOW_ALGOS as written (test.sh), which keeps 400 that is_slow drops
   # for attack selection. It caps a single-hash whole-word run at 12 vectors instead of 32.
 
-  return mode in FAKE_SLOW or host_engine(mode)
+  return profile(mode).get("fake_slow") or host_engine(mode)
 
 
 def a4_optimized(mode):
@@ -956,7 +981,7 @@ def a4_vectors(mode, pairs, optimized):
 def attacks_for(spec, mode):
   wanted = ATTACK_ORDER if spec == "all" else [int(spec)]
 
-  if mode in MASK_ONLY_MODES:
+  if profile(mode).get("mask_only"):
     return [a for a in wanted if a == 3]
 
   if is_slow(mode):
@@ -966,10 +991,10 @@ def attacks_for(spec, mode):
 
 
 def decode_hashfile(mode, digest):
-  # test.sh/1062: the base64 decodes to the file hashcat reads. 22000/22001 are handed their
+  # The base64 decodes to the file hashcat reads. A decode_hashfile_raw mode is handed its
   # line as is instead.
 
-  if mode in (22000, 22001):
+  if profile(mode).get("decode_hashfile_raw"):
     return (digest + "\n").encode("ascii")
 
   return base64.b64decode(digest)
@@ -1145,11 +1170,13 @@ def run_single(opts, mode, pairs, args, width, file_only, pass_only, tmp):
 
     candidate = word
 
-    if mode == 20510:
-      # PKZIP master key, 6 byte optimization: hashcat is fed the key without its first 6 bytes and
-      # reconstructs the whole password in the crack line, which output_has_crack still matches
-      # against the full word. The other attacks already cut the word the same way.
-      candidate = word[6:]
+    strip = profile(mode).get("strip", 0)
+
+    if strip:
+      # A strip mode (PKZIP master key) is fed the candidate without its first `strip` bytes and
+      # reconstructs them in the crack line, which output_has_crack still matches against the full
+      # word. Every attack cuts the candidate the same way.
+      candidate = word[strip:]
 
     rc, out = run_hashcat(opts, mode, target, candidate + b"\n")
 
@@ -1276,10 +1303,12 @@ def whole_word_single(r, attack):
   for word, digest in vectors[:max_n]:
     candidate = word
 
-    if r.mode == 20510:
-      # PKZIP master key: hashcat is fed the key without its 6 byte prefix, the recovered line still
-      # carries the whole password (test.sh).
-      candidate = word[6:]
+    strip = profile(r.mode).get("strip", 0)
+
+    if strip:
+      # A strip mode (PKZIP master key) is fed the candidate without its `strip` byte prefix; the
+      # recovered line still carries the whole password.
+      candidate = word[strip:]
 
     if attack == 4 and len(candidate) == 0:
       # A ruleset cannot write an empty candidate, so it is skipped rather than run (test.sh).
@@ -1419,30 +1448,10 @@ def utf8_split_point(text, off):
 
 
 def combinator_init_params(mode):
-  # init()'s per mode line skip and split offset for the single-build dicts (test.sh).
-  # init_min lines are left out of the dicts, min_offset shifts the split toward the tail.
+  # init()'s per mode line skip and split offset for the single-build dicts. init_min lines are left
+  # out of the dicts; min_offset shifts the split toward the tail. A mode sets them in its profile.
 
-  init_min = 1
-  min_offset = 0
-
-  if mode == 2500:
-    min_offset = 7
-  elif mode == 14000:
-    init_min = 0
-    min_offset = 4
-  elif mode == 14100:
-    init_min = 0
-    min_offset = 3
-  elif mode == 14900:
-    init_min = 0
-    min_offset = 5
-  elif mode == 15400:
-    init_min = 0
-    min_offset = 3
-  elif mode == 16800:
-    min_offset = 7
-  elif mode == 22000:
-    min_offset = 7
+  init_min, min_offset = profile(mode).get("combinator_init", (1, 0))
 
   return init_min, min_offset
 
@@ -1492,22 +1501,25 @@ def split_for_combinator(pairs, mode):
 
 
 def combinator_single_range(mode):
-  # attack_1 single processes hashes whose 1-based index is in (min, max] (test.sh).
+  # attack_1 single processes hashes whose 1-based index is in (min, max]. A mode sets the range in
+  # its profile; the reason lives next to the value in the module.
 
-  smin, smax = 1, 8
-
-  if mode in (14000, 14100, 14900, 15400):
-    smin, smax = 0, 5
-  elif mode == 20510:
-    smin = 2
+  smin, smax = profile(mode).get("combinator_single", (1, 8))
 
   return smin, smax
 
 
 def combinator_multi_offset(mode):
-  # attack_1 multi takes the last offset hashes as one batch (test.sh).
+  # attack_1 multi takes the last offset hashes as one batch. A mode sets the offset in its profile.
+  # 5800 is still an inline branch here; its offset is not a clean function of a length property, so
+  # its reason is researched before it moves to its profile.
 
-  if mode in (5800, 3000):
+  offset = profile(mode).get("combinator_multi_offset")
+
+  if offset is not None:
+    return offset
+
+  if mode == 5800:
     return 6
 
   return 7
@@ -1577,9 +1589,9 @@ def run_combinator_single(r, dict1_lines, dict2_lines, dict1_path, dict2_path):
 
       d1p, d2p = dict1_path, dict2_path
 
-      if r.mode == 20510:
+      if profile(r.mode).get("pkzip_masterkey"):
         # dict line for this hash: min 0 counts from 1, otherwise it trails the hash by one
-        # because init() left the length 1 line out (test.sh).
+        # because init() left the length 1 line out.
         if smin == 0:
           line_nr = i
         elif i > 1:
@@ -1748,7 +1760,7 @@ def output_has_crack(mode, out, word, digest, pass_only, tmp):
     if match_search(digest, word.hex().encode("ascii"), pass_only) in out:
       return True
 
-  if mode in MFULC_MODES:
+  if profile(mode).get("match_digest_colon"):
     if digest.encode("ascii") + b":" in out:
       return True
 
@@ -1773,37 +1785,34 @@ def output_has_crack(mode, out, word, digest, pass_only, tmp):
 
 
 def a3_single_max(mode):
-  # test.sh attack_3 single (test.sh): the number of hashes a single-hash run covers. Some
-  # modes cap it lower because they carry a minimum password length.
+  # attack_3 single: the number of hashes a single-hash run covers. A mode with a fixed or minimum
+  # password length caps it below the default 8 through its profile; the reason lives next to the
+  # value in the mode's module.
 
-  if mode in (14000, 14100, 14900, 15400):
-    return 1
-
-  if mode in (2500, 16800, 22000):
-    return 7
-
-  return 8
+  return profile(mode).get("a3_single_max", 8)
 
 
 def a3_single_mask(mode, word, i):
-  # test.sh attack_3 single mask (test.sh): the first i bytes become a '?d' run rewritten to
-  # spell them and the rest of the password trails as literals. 14000 and 14100 hand hashcat the
-  # whole password as a literal mask instead, and 20510 drops the leading groups the mode does not
-  # keep.
+  # attack_3 single mask: the first i bytes become a '?d' run rewritten to spell them and the rest
+  # of the password trails as literals. A mode may set a3_single_mask to "literal" to hand hashcat
+  # the whole password as a literal mask instead, or carry a strip offset (PKZIP master key), in
+  # which case the mask is rebuilt over the stripped candidate. Both are keyed on the profile.
 
-  if mode in (14000, 14100):
+  if profile(mode).get("a3_single_mask") == "literal":
     return word
 
-  if mode == 20510:
-    # PKZIP master key, 6 byte optimization: the kernel is fed the password with its first 6 bytes
-    # dropped and reconstructs them, so the mask has to spell that stripped candidate, not the whole
-    # word. Build it over the candidate directly, byte by byte, rather than cutting a literalized
-    # whole word mask by a fixed offset. The offset form miscounts whenever a non-digit byte sits in
-    # the first 6 bytes, since mask_literalize spells a non-digit as a one character literal while a
-    # '?d' group is two, so the cut lands wrong and the mask spells the wrong candidate. Brute force
-    # the leading positions the index reaches past the 6 byte cut; spell the rest literally.
-    cand = word[6:]
-    nd   = max(i - 6, 0)
+  strip = profile(mode).get("strip", 0)
+
+  if strip:
+    # A strip mode (PKZIP master key) has the kernel fed the password with its first `strip` bytes
+    # dropped and reconstructs them, so the mask spells that stripped candidate, not the whole word.
+    # Build it over the candidate directly, byte by byte, rather than cutting a literalized whole
+    # word mask by a fixed offset: the offset form miscounts whenever a non-digit byte sits in the
+    # first `strip` bytes, since mask_literalize spells a non-digit as a one character literal while
+    # a '?d' group is two, so the cut lands wrong and the mask spells the wrong candidate. Brute
+    # force the leading positions the index reaches past the cut; spell the rest literally.
+    cand = word[strip:]
+    nd   = max(i - strip, 0)
 
     if nd > len(cand):
       nd = len(cand)
@@ -1833,8 +1842,20 @@ def attack_3_single(r):
 
       continue
 
-    # test.sh: PKZIP master key needs at least two '?d' groups to keep after the cut.
-    if r.mode == 20510 and i <= 1:
+    # A mode may need at least N '?d' groups left after its cut, so a mask index below that spells
+    # no valid candidate and is skipped (PKZIP master key needs two).
+    if i < profile(r.mode).get("a3_min_groups", 1):
+      i += 1
+
+      continue
+
+    # A mode may raise the candidate floor for one attack through pw_min_by_attack, so a word the
+    # base length range allows is not tried under this attack when it is shorter than that floor
+    # (for example a mask attack that cannot spell a candidate a wordlist feeds verbatim). Absent,
+    # the base range applies, so a mode that declares no override behaves as before.
+    a3_min = profile(r.mode).get("pw_min_by_attack", {}).get(3)
+
+    if a3_min is not None and len(word) < a3_min:
       i += 1
 
       continue
@@ -1864,26 +1885,24 @@ def attack_3_single(r):
 
 
 def a3_multi_increment(mode):
-  # test.sh attack_3 multi (test.sh): the --increment window. A slow mode narrows it, and the
-  # modes with a minimum password length move it up.
+  # attack_3 multi: the --increment window. A slow mode narrows it, and a mode with a minimum
+  # password length moves it up through its profile (reason next to the value in the module).
 
-  increment_min = 1
-  increment_max = 5 if is_timeout(mode) else 8
+  override = profile(mode).get("a3_multi_increment")
 
-  if mode in (2500, 16800, 22000):
-    increment_min = 8
-    increment_max = 9
+  if override is not None:
+    return override[0], override[1]
 
-  return increment_min, increment_max
+  return 1, (5 if is_timeout(mode) else 8)
 
 
 def a3_custom_charsets(mode, sel_passwords):
-  # test.sh attack_3 multi (test.sh): 2500, 16800 and 22000 pin the mask to ?d?d?d?d?d?1?2?3?4
-  # and build the -1..-4 charsets out of the bytes the passwords carry at positions 6, 7, 8 and 9.
-  # All three run outside the kernel, so a mode-3 run never reaches this today; it is kept so the
-  # port stays faithful to test.sh.
+  # attack_3 multi: a mode may pin the mask to ?d?d?d?d?d?1?2?3?4 and build the -1..-4 charsets out
+  # of the bytes the passwords carry at positions 6, 7, 8 and 9. These modes run outside the kernel,
+  # so a mode-3 run never reaches this today; it is kept so the port stays faithful. A mode opts in
+  # through its profile.
 
-  if mode not in (2500, 16800, 22000):
+  if not profile(mode).get("a3_custom_charsets"):
     return []
 
   args = []
@@ -1982,7 +2001,7 @@ def attack_3_multi(r):
 
   custom = a3_custom_charsets(r.mode, words[:len(sel)])
 
-  if r.mode in (2500, 16800, 22000):
+  if profile(r.mode).get("a3_custom_charsets"):
     mask_arg = b"?d?d?d?d?d?1?2?3?4"
 
   increment_opts = []
@@ -2052,50 +2071,19 @@ def hybrid_extra(items):
 
 
 def multi_len_params(mode, attack=None):
-  # test.sh init () multi split (test.sh). min_len shifts the split toward the tail, and a
-  # fixed_len mode draws every length slot at that one length except the slot that already matches.
+  # init() multi split. min_len shifts the split toward the tail, and a fixed_len mode draws every
+  # length slot at that one length except the slot that already matches. A mode sets these in its
+  # profile; the reason lives next to the values in the module. A fixed-length mode may carry a
+  # separate attack_7 offset (multi_min_len_a7), since a7 pins the split lower than the other multis.
 
-  min_len   = 0
-  fixed_len = 0
+  p = profile(mode)
 
-  if mode == 2500:
-    min_len = 7
-  elif mode in (14000, 14100, 14900, 15400):
-    # The oracle makes one password length only, so every slot is pinned to it, or the hybrid multi
-    # runs feed hashcat an empty hash file. The split keeps the masked part to a few bytes: the tail
-    # for -a 6 and the head for -a 7.
-    fixed_len = {14000: 8, 14100: 24, 14900: 10, 15400: 32}[mode]
-    min_len   = 3 if attack == 7 else fixed_len - 5
-  elif mode == 16800:
-    min_len = 7
-  elif mode == 22000:
-    min_len = 7
-  elif mode in (9710, 9810, 10410):
-    # Collider #1: the candidate is the 5 byte RC4 key, the only length the oracle makes. Without
-    # a fixed length every slot but one asks for a length the mode has no vector for, so the multi
-    # run feeds hashcat an empty hash file and, once the empty tail mask is dropped, no mask either,
-    # which hashcat rejects. Pin every slot to length 5 so each builds a valid run.
-    fixed_len = 5
-  elif mode == 33500:
-    fixed_len = 5
-  elif mode == 33501:
-    min_len   = 5
-    fixed_len = 9
-  elif mode == 33502:
-    min_len   = 5
-    fixed_len = 13
-  elif mode == 36900:
-    fixed_len = 8
-  elif mode == 36901:
-    fixed_len = 5
-  elif mode == 37400:
-    # pw_min is 9, so a length slot below it produces no vector and the multi run would feed
-    # hashcat an empty hash file. Pin every slot to a valid length, and push the split toward the
-    # tail so the mask the hybrid runs brute force stays one digit rather than the whole word. The
-    # offset is 4 so the slot the a6/a12 multi runs (its head is 8 of the 9 bytes) still leaves a
-    # one byte tail for the mask, since an empty mask would drop the argument and fail the run.
-    min_len   = 4
-    fixed_len = 9
+  fixed_len = p.get("multi_fixed_len", 0)
+
+  if attack == 7 and "multi_min_len_a7" in p:
+    min_len = p["multi_min_len_a7"]
+  else:
+    min_len = p.get("multi_min_len", 0)
 
   return min_len, fixed_len
 
@@ -2172,19 +2160,10 @@ def write_hashes(path, pairs, mode, file_only):
 
 
 def a6_single_params(mode):
-  # test.sh attack_6 single (test.sh). mask_offset drives a first-line custom split that
-  # attack_6 builds but never runs, so only min and max are read here.
+  # attack_6 single. mask_offset drives a first-line custom split that attack_6 builds but never
+  # runs, so only min and max are read here; a mode narrows them through its profile.
 
-  min_i, max_i = 1, 8
-
-  if mode == 2500:
-    max_i = 6
-  elif mode in (14000, 14100, 14900, 15400):
-    min_i, max_i = 0, 1
-  elif mode == 16800:
-    max_i = 6
-  elif mode == 22000:
-    max_i = 6
+  min_i, max_i = profile(mode).get("a6_single", (1, 8))
 
   return min_i, max_i
 
@@ -2217,9 +2196,11 @@ def attack_6_single(r):
 
       pass_b = word
 
-      if r.mode == 20510:
-        # PKZIP master key: hashcat is fed the key without its 6 byte prefix.
-        pass_b = pass_b[6:]
+      strip = profile(r.mode).get("strip", 0)
+
+      if strip:
+        # A strip mode (PKZIP master key) is fed the candidate without its `strip` byte prefix.
+        pass_b = pass_b[strip:]
 
       # test.sh: the index is the mask length, capped one byte below the password so a mode
       # with only short passwords still produces a case. A password that leaves no room for a word
@@ -2246,7 +2227,7 @@ def attack_6_single(r):
                             extra=hybrid_extra([dict1_a6, mask]))
 
       # The search reconstructs the password from the unmodified single dicts at line i-1, so it
-      # carries the whole password even for 20510 whose run word was cut (test.sh).
+      # carries the whole password even for a strip mode whose run word was cut.
 
       line_nr = i - 1 if i > 1 else 1
 
@@ -2264,35 +2245,14 @@ def attack_6_single(r):
 
 
 def a6_multi_params(mode):
-  # test.sh attack_6 multi (test.sh).
+  # attack_6 multi. A mode narrows the length window through its profile; the reason lives next to
+  # the value in the module. The is_timeout cap stays here: it depends on runtime speed detection,
+  # not on a fixed property of the mode, so it is generic machinery rather than per-mode data.
 
-  min_i, max_i = 1, 9
+  p = profile(mode)
 
-  if mode == 2500:
-    max_i = 5
-  elif mode == 3000:
-    max_i = 8
-  elif mode in (7700, 7701):
-    max_i = 8
-  elif mode == 8500:
-    max_i = 8
-  elif mode == 16800:
-    max_i = 5
-  elif mode == 22000:
-    max_i = 5
-  elif mode == 33500:
-    min_i = 5
-  elif mode == 33501:
-    # The candidate is only a few characters once a multibyte byte is folded in, so a head of 8
-    # would cover the whole word and leave the mask empty. Keep the head short enough that every
-    # slot still has a tail for the mask.
-    min_i = 5
-  elif mode == 33502:
-    min_i = 8
-  elif mode == 37400:
-    # pw_min 9: run only the longest slot (head 8 of the 9 bytes, one digit in the mask) so the
-    # hybrid does not brute force a long run of digits over a slow DES hash.
-    min_i = 8
+  min_i = p.get("a6_multi_min", 1)
+  max_i = p.get("a6_multi_max", 9)
 
   if is_timeout(mode):
     max_i = 5
@@ -2387,24 +2347,10 @@ def attack_6(r):
 
 
 def a7_single_params(mode):
-  # test.sh attack_7 single (test.sh). mask_offset drives the min == 0 custom split.
+  # attack_7 single. mask_offset drives the min == 0 custom split; a mode sets (min, max, offset)
+  # through its profile (reason next to the value in the module).
 
-  min_i, max_i, mask_offset = 1, 8, 0
-
-  if mode == 2500:
-    max_i = 5
-  elif mode == 14000:
-    min_i, max_i, mask_offset = 0, 1, 4
-  elif mode == 14100:
-    min_i, max_i, mask_offset = 0, 1, 3
-  elif mode == 14900:
-    min_i, max_i, mask_offset = 0, 1, 5
-  elif mode == 15400:
-    min_i, max_i, mask_offset = 0, 1, 3
-  elif mode == 16800:
-    max_i = 5
-  elif mode == 22000:
-    max_i = 5
+  min_i, max_i, mask_offset = profile(mode).get("a7_single", (1, 8, 0))
 
   return min_i, max_i, mask_offset
 
@@ -2458,21 +2404,22 @@ def attack_7_single(r):
       d2_path  = dict2_base
       active   = custom_active
 
-      if r.mode == 20510:
-        # PKZIP master key, 6 byte optimization: the kernel is fed the password with its first 6
-        # bytes dropped and reconstructs them, so the candidate the mask and the dict build between
-        # them has to be that stripped password, not the whole one. A short head spells the mask,
-        # the rest trails in the dict; the head length follows the multi slot so the single and
-        # multi runs line up, and is kept to at least 1 byte since an empty mask drops the argument
-        # and the run faults.
+      strip = profile(r.mode).get("strip", 0)
+
+      if profile(r.mode).get("pkzip_masterkey"):
+        # PKZIP master key: the kernel is fed the password with its first `strip` bytes dropped and
+        # reconstructs them, so the candidate the mask and the dict build between them has to be that
+        # stripped password, not the whole one. A short head spells the mask, the rest trails in the
+        # dict; the head length follows the multi slot so the single and multi runs line up, and is
+        # kept to at least 1 byte since an empty mask drops the argument and the run faults.
         pass_full = sed_line(dict1_lines, line_nr) + sed_line(dict2_lines, line_nr)
 
-        if len(pass_full) <= 6:
+        if len(pass_full) <= strip:
           continue
 
-        cut        = pass_full[6:]
-        mpairs     = multi_pairs(20510, i, optimized)
-        md1, _     = build_multi_dicts(20510, i, mpairs)
+        cut        = pass_full[strip:]
+        mpairs     = multi_pairs(r.mode, i, optimized)
+        md1, _     = build_multi_dicts(r.mode, i, mpairs)
         multi_head = md1[0] if md1 else b""
         mask_len   = len(mask_literalize(mask_dots(len(multi_head)), multi_head)) // 2
 
@@ -2524,27 +2471,11 @@ def attack_7_single(r):
 
 
 def a7_multi_max(mode):
-  # test.sh attack_7 multi (test.sh). 33500 sets a min the loop never reads, so only max
-  # is carried here.
+  # attack_7 multi: the upper length-slot bound. A mode sets it in its profile; the reason lives
+  # next to the value in the module. The is_timeout cap stays here as generic machinery, since it
+  # depends on runtime speed detection rather than a fixed property of the mode.
 
-  max_i = 9
-
-  if mode == 2500:
-    max_i = 5
-  elif mode == 3000:
-    max_i = 8
-  elif mode in (7700, 7701):
-    max_i = 8
-  elif mode == 8500:
-    max_i = 8
-  elif mode in (14000, 14100, 14900, 15400, 16800, 22000):
-    max_i = 5
-  elif mode in (33501, 33502):
-    max_i = 3
-  elif mode == 37400:
-    # pw_min 9: keep the mask-on-the-left run to the shortest slot so the brute forced head stays a
-    # few digits over a slow DES hash.
-    max_i = 3
+  max_i = profile(mode).get("a7_multi_max", 9)
 
   if is_timeout(mode):
     max_i = 7
@@ -2642,24 +2573,19 @@ def attack_7(r):
 # The multi path builds the same length-slot dicts attack_6 and attack_7 do, so it reuses
 # a6_multi_params, multi_pairs and build_multi_dicts.
 
-# The modes attack_12 reports Skip for outright: a mode that accepts one candidate length only has
-# nothing for a mask on both sides of the word to vary, and 20510 reports a plaintext that is not the
-# candidate it was given. attack_6 and attack_7 already cover these (test.sh).
-
-A12_SKIP = {14000, 14100, 14900, 15400, 20510}
+# A mode sets a12_skip in its profile when attack_12 has nothing meaningful to run for it; the
+# reason lives next to the flag in the mode's module.
 
 
 def a12_single_max(mode):
-  # test.sh attack_12 single (test.sh): the highest 1-based hash index a single run covers.
+  # attack_12 single: the highest 1-based hash index a single run covers. A mode narrows it from the
+  # default 8 through its profile; the reason lives next to the value in the mode's module.
 
-  if mode in (2500, 16800, 22000):
-    return 6
-
-  return 8
+  return profile(mode).get("a12_single_max", 8)
 
 
 def report_skip_counts(r, target_name):
-  # test.sh attack_12 forces the summary to Skip for an A12_SKIP mode while still printing the zeroed
+  # attack_12 forces the summary to Skip for an a12_skip mode while still printing the zeroed
   # counts line, not the reason form report_skip uses (test.sh). The loop breaks
   # before any candidate runs, so every count is zero.
 
@@ -2671,7 +2597,7 @@ def report_skip_counts(r, target_name):
 
 
 def attack_12_single(r):
-  if r.mode in A12_SKIP:
+  if profile(r.mode).get("a12_skip"):
     report_skip_counts(r, "single")
 
     return
@@ -2777,7 +2703,7 @@ def attack_12_multi(r):
   if has_multi_hash(r.mode):
     return
 
-  if r.mode in A12_SKIP:
+  if profile(r.mode).get("a12_skip"):
     report_skip_counts(r, "multi")
 
     return
@@ -2934,6 +2860,79 @@ def selftest_vector_read(mode):
     return None
 
   return (vhash, vpass, vfmt.decode("ascii", "replace"), deprecated)
+
+
+def hashinfo_pw_len(mode):
+  # The C module's password length bounds, read from --hash-info --machine-readable. They come
+  # straight from module_pw_min / module_pw_max, so they are the authoritative floor and ceiling the
+  # kernel accepts. Returns (min, max), or None when the mode publishes no hash-info.
+  proc = subprocess.run([BIN, "-m", str(mode), "--hash-info", "--machine-readable"] + module_opts(mode) + ISOLATION,
+                        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+  info = proc.stdout
+
+  if not info:
+    return None
+
+  lo = sed_capture(info, rb'"password_len_min": (\d+)')
+  hi = sed_capture(info, rb'"password_len_max": (\d+)')
+
+  if lo == b"" or hi == b"":
+    return None
+
+  return int(lo), int(hi)
+
+
+def oracle_word_ranges(mode):
+  # The oracle's declared word-length ranges, read from the module through the runner's constraints
+  # subcommand. Returns the present (min, max) pairs (pure first, then optimized), or None when the
+  # module will not load or declares no word range.
+  proc = subprocess.run([sys.executable, RUNNER, "constraints", str(mode)],
+                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+  if proc.returncode != 0 or not proc.stdout.strip():
+    return None
+
+  pairs = json.loads(proc.stdout)
+
+  out = []
+
+  for idx in (0, 2):
+    lo, hi = pairs[idx]
+
+    if not (lo == -1 and hi == -1):
+      out.append((lo, hi))
+
+  return out or None
+
+
+def check_pw_len(modes):
+  # Cross-check: the oracle's word-length minimum, as the kernel sees it, must equal the C module's
+  # password_len_min (module_pw_min from --hash-info). A mismatch means the suite generates
+  # candidates from a different floor than the kernel accepts, which is how the mode 6900
+  # empty-password bug hid: the kernel took length 0 but the oracle started at 1, so the empty
+  # candidate was never tried. A strip mode feeds the kernel the candidate without its first `strip`
+  # bytes, so the kernel-visible minimum is the oracle minimum less the strip. Returns the list of
+  # (mode, kernel_visible_min, hashinfo_min) mismatches.
+  drift = []
+
+  for mode in modes:
+    hinfo = hashinfo_pw_len(mode)
+    ranges = oracle_word_ranges(mode)
+
+    if hinfo is None or ranges is None:
+      continue
+
+    hmin, _ = hinfo
+    strip   = profile(mode).get("strip", 0)
+
+    for (omin, _omax) in ranges:
+      visible = max(omin - strip, 0)
+
+      if visible != hmin:
+        drift.append((mode, visible, hmin))
+
+  return drift
 
 
 def selftest_write_hash(mode, vhash, vfmt, path):
@@ -4497,9 +4496,9 @@ def selftest_vector_test(args, opts, mode, attack, width_label, tmp):
   if attack == 65535:
     attack = 0
 
-  # A MASK_ONLY_MODES mode ships an -a 3 kernel only, so that is the attack its vector is cracked with.
+  # A mask-only mode ships an -a 3 kernel only, so that is the attack its vector is cracked with.
 
-  if mode in MASK_ONLY_MODES:
+  if profile(mode).get("mask_only"):
     attack = 3
 
   lines = []
@@ -4680,7 +4679,7 @@ def selftest_vector_sweep(args):
       for line in out_lines:
         print(line)
 
-      if sweep_mode in NO_SELFTEST:
+      if profile(sweep_mode).get("no_selftest"):
         sweep_na += "%d " % sweep_mode
         continue
 
@@ -4775,7 +4774,7 @@ def run_parallel_selftest(args):
       sys.stdout.buffer.write(out)
       sys.stdout.buffer.flush()
 
-      if mode in NO_SELFTEST:
+      if profile(mode).get("no_selftest"):
         sweep_na += "%d " % mode
         continue
 
@@ -4902,22 +4901,15 @@ EDGE_WHOLE_WORD = (0, 4, 8, 9)
 EDGE_WIDTHS     = [1, 2, 4, 8, 16]
 EDGE_RUNTIME    = 270
 
-# 2000 (STDOUT) has an empty kernel and never cracks, so edge-cracking it only makes errors
-# (test_edge.sh SKIP_HASH_TYPES). The deprecated WPA modes are dropped by the -HH check instead.
+# A mode sets edge_skip in its profile when edge-cracking it only makes errors; the reason lives next
+# to the flag in the mode's module. The deprecated WPA modes are dropped by the -HH check instead.
 
-EDGE_SKIP_MODES = {2000}
+# A mode sets edge_skip_out_match in its profile when its recovered outfile cannot be compared to
+# what the oracle generated; the reason lives next to the flag in the mode's module
+# (test_edge.sh SKIP_OUT_MATCH_HASH_TYPES).
 
-# 14000/14100/31500/31600 crack a plaintext other than the one the hash was made from, and
-# 22000/22001 write the handshake parts rather than hash and plaintext, so their outfile cannot be
-# compared to what the oracle generated (test_edge.sh SKIP_OUT_MATCH_HASH_TYPES).
-
-EDGE_SKIP_OUT_MATCH = {14000, 14100, 22000, 22001, 31500, 31600}
-
-# The modes whose -HH says same-salt is "Not" allowed but that the suite runs with a shared salt
-# anyway (test_edge.sh SKIP_SAME_SALT_HASH_TYPES, the active list).
-
-EDGE_SKIP_SAME_SALT = {6600, 7100, 7200, 8200, 13400, 15300, 15310, 15900, 15910, 16900,
-                       18300, 18900, 20200, 20300, 20400, 27000, 27100, 29700, 29930, 29940}
+# A mode sets edge_skip_same_salt in its profile when its -HH says same-salt is "Not" allowed but
+# the suite runs it with a shared salt anyway (test_edge.sh SKIP_SAME_SALT_HASH_TYPES).
 
 EDGE_HH_CACHE = {}
 
@@ -5345,16 +5337,18 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
 
     word_compare = None
 
-    if ctx.mode == 20510:
-      # PKZIP master key reports a plaintext that is not the candidate; the candidate is the word
-      # without its first 6 bytes (test_edge.sh).
+    strip = profile(ctx.mode).get("strip", 0)
+
+    if strip:
+      # A strip mode (PKZIP master key) reports a plaintext that is not the candidate; the candidate
+      # is the word without its first `strip` bytes.
       word_compare = word
-      word         = word[6:]
+      word         = word[strip:]
 
     if ctx.hexify_plain:
       word_compare = word.hex().encode("ascii")
 
-    if ctx.mode == 20510 and word_len <= 6 and len(word) == 0 and ctx.attack in (3, 6, 7, 12):
+    if strip and word_len <= strip and len(word) == 0 and ctx.attack in (3, 6, 7, 12):
       continue
 
     # A -a 4 grammar cannot write an empty word or one holding a tab (test_edge.sh
@@ -5404,7 +5398,7 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
 
       continue
 
-    if ctx.mode in EDGE_SKIP_OUT_MATCH or ctx.keep_guessing:
+    if profile(ctx.mode).get("edge_skip_out_match") or ctx.keep_guessing:
       continue
 
     try:
@@ -5523,7 +5517,7 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
 
   cnt_max = hh["cnt_max"]
 
-  if mode == 20510 or ctx.binary:
+  if profile(mode).get("single_only") or ctx.binary:
     cnt_max = 1
 
   # A mode that loads at most one hash has no multi run; nor does -a 9 on a mode where every hash is
@@ -5537,7 +5531,7 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
 
   same_salt = True
 
-  if mode not in EDGE_SKIP_SAME_SALT and hh["same_salt_not"]:
+  if not profile(mode).get("edge_skip_same_salt") and hh["same_salt_not"]:
     same_salt = False
 
   if attack == 9:
@@ -5562,9 +5556,11 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
 
     word_compare = None
 
-    if mode == 20510:
+    strip = profile(mode).get("strip", 0)
+
+    if strip:
       word_compare = word
-      word         = word[6:]
+      word         = word[strip:]
 
     if ctx.hexify_plain:
       word_compare = word.hex().encode("ascii")
@@ -5589,7 +5585,7 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
   if hash_cnt <= 1:
     return 0, 0, False
 
-  use_compare = ctx.hexify_plain or mode == 20510
+  use_compare = ctx.hexify_plain or bool(profile(mode).get("strip"))
 
   hash_in = os.path.join(tmp, "edge_m_%d_%s_%d_%d.hashes" % (mode, ctx.ktype, attack, width))
 
@@ -5629,7 +5625,7 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
 
     return 1, 1, rc == 250
 
-  if mode in EDGE_SKIP_OUT_MATCH or ctx.keep_guessing:
+  if profile(mode).get("edge_skip_out_match") or ctx.keep_guessing:
     return 0, 1, False
 
   try:
@@ -5654,7 +5650,7 @@ def edge_process_mode(args, mode, cfg, tmp):
   # One mode's whole edge run: the skip gates, then every attack, kernel, width and target the
   # options ask for. Returns (errors, cells).
 
-  if mode in EDGE_SKIP_MODES:
+  if profile(mode).get("edge_skip"):
     print("[ test.py edge ] > Skip Type %d (common)" % mode)
 
     return 0, 0
@@ -5671,6 +5667,8 @@ def edge_process_mode(args, mode, cfg, tmp):
   hexify_plain = edge_hexify_plain(mode)
   no_salt      = (not hh["salt_present"]) or hh["salt_virtual"]
   pt_hex       = hh["pw_type"] == "HEX"
+  # 31500/31600 stay an inline branch: the reason they force base58 plaintext handling is not yet
+  # written, so the flag is left to migrate with its reason rather than guessed.
   pt_base58    = hh["pw_type"] == "BASE58" or mode in (31500, 31600)
   keep_guess   = hh["keep_guessing"]
 
@@ -5678,9 +5676,9 @@ def edge_process_mode(args, mode, cfg, tmp):
   cells  = 0
 
   for attack in cfg["attacks"]:
-    # A MASK_ONLY_MODES mode ships an -a 3 kernel only, so every other attack has nothing to run.
+    # A mask-only mode ships an -a 3 kernel only, so every other attack has nothing to run.
 
-    if mode in MASK_ONLY_MODES and attack != 3:
+    if profile(mode).get("mask_only") and attack != 3:
       continue
 
     kernel_types = hh["kernel_types"]
@@ -6293,6 +6291,9 @@ def main():
   ap.add_argument("-m", dest="mode", default="all", help="N | all | min-max")
   ap.add_argument("-a", dest="attack", default=None,
                   help="0 | 1 | 3 | 4 | 6 | 7 | 8 | 9 | 12 | all (--edge takes a comma list too)")
+  ap.add_argument("--check-pw-len", dest="check_pw_len", action="store_true",
+                  help="cross-check each mode's oracle word-length minimum against --hash-info "
+                       "(module_pw_min); report drift and exit")
   ap.add_argument("-t", dest="target", default="all", choices=["single", "multi", "all"])
   ap.add_argument("-D", dest="device", default="2", help="OpenCL device type")
   ap.add_argument("--skip-clean-cache", dest="skip_clean_cache", action="store_true",
@@ -6439,6 +6440,26 @@ def main():
   setup_outdir(args)
   atexit.register(finalize_outputs, "completed")
 
+  if args.check_pw_len:
+    # Cross-check only: compare each selected mode's oracle word-length minimum against the C
+    # module's password_len_min. It generates no vectors and runs no hashcat crack, so it needs no
+    # oracle engine beyond the constraints read.
+    drift = check_pw_len(select_modes(args.mode, discover_modes()))
+
+    for mode, visible, hmin in drift:
+      print("[ test.py ] [ Type %d ] > pw-len drift: oracle word min %d (kernel-visible) != "
+            "hash-info min %d" % (mode, visible, hmin))
+
+    if drift:
+      print("[ test.py ] > %d pw-len mismatch(es): the oracle floor differs from module_pw_min"
+            % len(drift))
+
+      sys.exit(1)
+
+    print("[ test.py ] > pw-len OK: oracle minimum matches hash-info across the checked modes")
+
+    sys.exit(0)
+
   if args.edge:
     sys.exit(run_edge(args))
 
@@ -6573,14 +6594,14 @@ def main():
         continue
 
       file_only = is_file_only(mode)
-      pass_only = file_only or mode in NOCHECK_ENCODING
+      pass_only = file_only or profile(mode).get("match_pass_only")
 
       # PKZIP master key only has a single hash test; a forced multi run is skipped outright
       # (test.sh).
 
       mode_targets = targets
 
-      if mode == 20510:
+      if profile(mode).get("single_only"):
         if targets == ["multi"]:
           continue
 
