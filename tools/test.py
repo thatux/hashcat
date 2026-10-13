@@ -3199,7 +3199,33 @@ def container_luks_legacy(args, mode, attack, width, tmp):
 # depth and the boot flag is tested. hash digit 4 is RIPEMD160 in boot mode, as test.sh had it.
 TC_HASH_DIGIT  = {1: "ripemd160", 2: "sha512", 3: "whirlpool", 4: "ripemd160"}
 TC_BOOT_DIGITS = {4}
-TC_MODES = {base + h * 10 + k for base in (6200, 29300) for h in (1, 2, 3, 4) for k in (1, 2, 3)}
+# Container and generator modes declare their input kind in a per-mode descriptor under
+# tools/test_modules/static or tools/test_modules/dynamic (TEST_INPUT = {"kind", "family"}), read
+# here without importing. The membership sets below are derived from those descriptors rather than
+# hardcoded, so a mode's kind lives in a file next to the mode. The per-family parameter tables
+# (the hash/cipher digit maps, the cascades) stay, since they hold derivation data the descriptor
+# does not carry.
+def _input_families(sub):
+  out = {}
+
+  for path in glob.glob(os.path.join(TDIR, "test_modules", sub, "m[0-9][0-9][0-9][0-9][0-9].py")):
+    mode = int(re.search(r"m0*([0-9]+)\.py$", path).group(1))
+
+    with open(path) as fh:
+      tree = ast.parse(fh.read())
+
+    for node in tree.body:
+      if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "TEST_INPUT" for t in node.targets):
+        out[mode] = ast.literal_eval(node.value)["family"]
+
+  return out
+
+
+STATIC_FAMILY  = _input_families("static")
+DYNAMIC_FAMILY = _input_families("dynamic")
+
+
+TC_MODES = {m for m, fam in STATIC_FAMILY.items() if fam == "truecrypt"}
 
 
 def container_truecrypt(args, mode, width, tmp):
@@ -3261,11 +3287,7 @@ VC_CASCADES    = {
   3: {0: "aes-twofish-serpent", 1: "serpent-twofish-aes", 5: "kuznyechik-serpent-camellia"},
 }
 
-VC_MODES = {13711, 13712, 13713, 13721, 13722, 13723, 13731, 13732, 13733, 13741, 13742, 13743,
-            13751, 13752, 13753, 13761, 13762, 13763, 13771, 13772, 13773, 13781, 13782, 13783,
-            29411, 29412, 29413, 29421, 29422, 29423, 29431, 29432, 29433, 29441, 29442, 29443,
-            29451, 29452, 29453, 29461, 29462, 29463, 29471, 29472, 29473, 29481, 29482, 29483,
-            29491, 29492, 29493}
+VC_MODES = {m for m, fam in STATIC_FAMILY.items() if fam == "veracrypt"}
 
 
 def container_veracrypt(args, mode, width, tmp):
@@ -3327,8 +3349,7 @@ def container_veracrypt(args, mode, width, tmp):
 CL_HASH_DIGIT   = {1: "sha1", 2: "sha256", 3: "sha512", 4: "ripemd160", 5: "whirlpool"}
 CL_CIPHER_DIGIT = {1: "aes", 2: "serpent", 3: "twofish"}
 
-CL_MODES = {14511, 14512, 14513, 14521, 14522, 14523, 14531, 14532, 14533,
-            14541, 14542, 14543, 14551, 14552, 14553}
+CL_MODES = {m for m, fam in STATIC_FAMILY.items() if fam == "cryptoloop"}
 
 
 def container_cryptoloop(args, mode, width, tmp):
@@ -3392,12 +3413,12 @@ def run_container_mode(args, mode, tmp):
 # for the container families (their dirs are repointed at a directory this run fills). CryptoLoop and
 # 14600 have no generator, so they are not in GEN_MODES: -g does not cover them.
 
-GPG_GEN_MODES      = {17010, 17020, 17030, 17040, 17050}
-PKZIP_GEN_MODES    = {17200, 17210, 17220, 17225, 17230}
-RAR_GEN_MODES      = {12500, 13000, 23700, 23800}
-SEVENZIP_GEN_MODES = {11600, 13600}
-PDF_GEN_MODES      = {10400, 10500, 10700}
-SSH_GEN_MODES      = {22931}
+GPG_GEN_MODES      = {m for m, fam in DYNAMIC_FAMILY.items() if fam == "gpg"}
+PKZIP_GEN_MODES    = {m for m, fam in DYNAMIC_FAMILY.items() if fam == "pkzip"}
+RAR_GEN_MODES      = {m for m, fam in DYNAMIC_FAMILY.items() if fam == "rar"}
+SEVENZIP_GEN_MODES = {m for m, fam in DYNAMIC_FAMILY.items() if fam == "sevenzip"}
+PDF_GEN_MODES      = {m for m, fam in DYNAMIC_FAMILY.items() if fam == "pdf"}
+SSH_GEN_MODES      = {m for m, fam in DYNAMIC_FAMILY.items() if fam == "ssh"}
 
 ARCHIVE_GEN_MODES = (GPG_GEN_MODES | PKZIP_GEN_MODES | RAR_GEN_MODES | SEVENZIP_GEN_MODES
                      | PDF_GEN_MODES | SSH_GEN_MODES)
