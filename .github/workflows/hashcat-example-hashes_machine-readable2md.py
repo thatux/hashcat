@@ -11,7 +11,7 @@ import os
 import re
 import subprocess
 
-# Replace LUKS v1 and v2 hashes, they're too big: Github no longer shows the .md "(Sorry about that, but we can’t show files that are this big right now.)"
+# Replace LUKS v1 and v2 hashes, they're too big: Github no longer shows the .md "(Sorry about that, but we can't show files that are this big right now.)"
 EXAMPLE_HASH_REPLACEMENTS = {
     "14600": "https://hashcat.net/misc/example_hashes/hashcat_luks_testfiles.7z",
     "29511": "https://hashcat.net/misc/example_hashes/hashcat_luks_sha1_aes_cbc-essiv_128.txt",
@@ -88,7 +88,7 @@ def find_opencl(zfilled_key, visited=None):
     if kernels:
         return " " + ",&nbsp;".join(sort_abbrevs(kernels))
 
-    # No kernels found → check module file for redirect
+    # No kernels found -> check module file for redirect
     module_file = os.path.join(MODULES_DIR, f"module_{zfilled_key}.c")
     if os.path.isfile(module_file):
         with open(module_file, "r", encoding="utf-8", errors="ignore") as f:
@@ -149,7 +149,7 @@ def main():
     try:
         data = json.loads(input_data)
     except json.JSONDecodeError as e:
-        sys.stderr.write(f"❌ Invalid JSON input: {e}\n")
+        sys.stderr.write(f"Invalid JSON input: {e}\n")
         sys.exit(1)
 
     kinds = load_input_kinds()

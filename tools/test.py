@@ -779,8 +779,8 @@ MODULE_OPTS_CACHE = {}
 
 
 def profile(mode):
-  # The per-mode test profile: the declarative parameters test.py used to hardcode in if-mode
-  # ladders and frozen sets, now owned by the mode's own module as a top-level TEST_PROFILE dict.
+  # The per-mode test profile: a mode's declarative test parameters, a top-level TEST_PROFILE dict
+  # in the mode's own module that test.py reads here.
   # Read from the source rather than imported, for the same reason module_opts does: the profile is
   # plain data with no dependency of its own, but importing the module would run the oracle's
   # top-level imports, which may not be installed. A mode with no profile means all defaults, so an
