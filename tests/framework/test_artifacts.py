@@ -191,6 +191,39 @@ def test_directory_snapshot_cannot_contain_artifacts(tmp_path):
   assert (tmp_path / "inputs").exists() == False
 
 
+def test_pathlike_literal_mask_is_preserved_after_case_removal(tmp_path):
+  root = tmp_path / "root"
+  root.mkdir()
+  binary = root / "hashcat"
+  binary.write_text("#!" + sys.executable + "\n" + '''
+import os
+import sys
+sys.stdout.buffer.write(os.fsencode(sys.argv[-1]))
+''')
+  binary.chmod(0o755)
+  case_directory = tmp_path / "case"
+  case_directory.mkdir()
+  literal = os.fsencode(case_directory / "unused-mask") + b"\xfd"
+  command = [str(binary), "-a", "3", "-m", "0", "0" * 32, literal]
+  ledger = artifacts.CaseResults(case_directory, cases.Case(0, "cracking"), {})
+  inputs = ledger.capture_inputs(command)
+  original = subprocess.run(command, capture_output=True, timeout=10)
+  assert original.returncode == 0
+  assert original.stdout == literal
+  ledger.save(command, None, execution.HashcatResult(command, 0, original.stdout, original.stderr, 0), inputs)
+  ledger.finish()
+  record = json.loads((case_directory / "invocation-0000" / "result.json").read_text())
+  assert "6" not in record["case_paths"]
+  retained = tmp_path / "retained"
+  shutil.copytree(case_directory, retained)
+  shutil.rmtree(case_directory)
+  reproduced = subprocess.run([sys.executable, str(retained / "reproduce.py"), "0", "--root", str(root)],
+                              capture_output=True, timeout=10)
+  assert reproduced.returncode == 0, reproduced.stderr
+  assert reproduced.stdout == literal
+  assert case_directory.exists() == False
+
+
 def test_directory_snapshot_rejects_symlink_expansion(tmp_path):
   rules = tmp_path / "rules"
   rules.mkdir()

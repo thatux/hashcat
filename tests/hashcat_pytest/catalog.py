@@ -117,7 +117,7 @@ def a4_optimized_skip(mode, optimized):
 
 
 def has_multi_hash(mode):
-  return edge_hh(mode)["cnt_max"] == 1
+  return mode == 20510 or source_capabilities(mode)["cnt_max"] == 1
 
 
 A12_SKIP = {14000, 14100, 14900, 15400, 20510}

@@ -90,7 +90,7 @@ def repository_paths(command, inputs):
   return paths
 
 
-def case_paths(command, directory):
+def case_paths(command, directory, tool=False):
   paths = {}
   literals = literal_arguments(command)
   for index in range(1, len(command)):
@@ -99,6 +99,9 @@ def case_paths(command, directory):
       continue
     path, prefix, is_directory = components
     try:
+      option = prefix.removesuffix("=") if prefix else os.fsdecode(command[index - 1])
+      if tool == False and option not in PATH_OPTIONS and path.is_file() == False and path.is_dir() == False:
+        continue
       relative = path.resolve().relative_to(directory.resolve())
       paths[str(index)] = {"relative": str(relative), "prefix": prefix,
                            "directory": is_directory or path.is_dir()}
@@ -196,7 +199,7 @@ class CaseResults:
         cracks = path.read_bytes()
         (folder / "cracks.bin").write_bytes(cracks)
     (folder / "command.txt").write_text(shlex.join([os.fsdecode(arg) for arg in command]) + "\n", errors="backslashreplace")
-    private_paths = case_paths(command, self.directory)
+    private_paths = case_paths(command, self.directory, tool)
     source_paths = repository_paths(command, inputs)
     for index in private_paths:
       source_paths.pop(argv[int(index)], None)
