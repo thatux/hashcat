@@ -50,18 +50,39 @@ def des_parity_plaintext(line):
 
 
 def normalize_output(raw, ordered=False, des_parity=False):
+  if ordered:
+    return raw
+  status_fields = {b"Session", b"Status", b"Hash.Mode", b"Hash.Target", b"Time.Started", b"Time.Estimated",
+                   b"Kernel.Feature", b"Guess.Base", b"Guess.Mod", b"Guess.Mask", b"Guess.Charset",
+                   b"Guess.Queue", b"Guess.Queue.Base", b"Guess.Queue.Mod", b"Recovered", b"Remaining",
+                   b"Recovered/Time", b"Progress", b"Rejected", b"Brain.Link.All", b"Brain.Rejects",
+                   b"Restore.Point", b"Restore.Sub", b"Candidate.Engine", b"Hardware.Mon.SMC"}
   output = []
   status = False
   for line in raw.split(b"\n"):
-    if line.partition(b":")[0].rstrip(b".") == b"Session":
+    if line == b"":
+      status = False
+      continue
+    label, separator, _ = line.partition(b": ")
+    field = label.rstrip(b".")
+    formatted = len(label) == 17 and bool(separator)
+    if formatted and field == b"Session":
       status = True
     if status:
-      if line == b"":
-        status = False
-      continue
+      dynamic = False
+      for prefix, padding in ((b"Speed.#", 8), (b"Candidates.#", 3), (b"Hardware.Mon.#", 1), (b"Brain.Link.#", 3)):
+        if field.startswith(prefix):
+          device = field[len(prefix):]
+          if device == b"*" and prefix == b"Speed.#":
+            dynamic = label == prefix + device + b"." * (padding + 1)
+          elif len(device) >= 2 and device.isdigit():
+            dynamic = label == prefix + device + b"." * padding
+          break
+      if separator and ((formatted and field in status_fields) or dynamic):
+        continue
     if line.startswith(b"STATUS\t") == False:
       output.append(des_parity_plaintext(line) if des_parity else line)
-  return b"\n".join(output if ordered else sorted(output))
+  return b"\n".join(sorted(output))
 
 
 def normalize(invocation):

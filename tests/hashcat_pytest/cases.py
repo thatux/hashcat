@@ -160,6 +160,8 @@ def collect_cases(config, suite):
               continue
             if suite == "edge" and attack == 9 and (facts["salt_present"] == False or facts["salt_virtual"]):
               continue
+            if suite == "edge" and attack == 9 and catalog.oracle_salt_range(mode, kernel) in ((-1, -1), (0, 0)):
+              continue
           for width in widths:
             cases.append(Case(mode, suite, attack, kernel, target, width))
   return cases

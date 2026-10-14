@@ -343,22 +343,36 @@ def source_capabilities(mode):
 
 
 @lru_cache(maxsize=None)
-def oracle_families(mode):
+def oracle_constraints(mode):
   path = Path(runtime.TDIR, "test_modules", "m%05d.py" % mode)
   if path.is_file() == False:
-    return []
+    return None
   tree = ast.parse(path.read_text())
   for node in tree.body:
     if isinstance(node, ast.FunctionDef) and node.name == "module_constraints":
       for child in ast.walk(node):
         if isinstance(child, ast.Return):
           try:
-            constraints = ast.literal_eval(child.value)
+            return ast.literal_eval(child.value)
           except (ValueError, TypeError):
             continue
-          return [family for index, family in ((0, "pure"), (2, "optimized"))
-                  if constraints[index] != [-1, -1]]
+  return None
+
+
+@lru_cache(maxsize=None)
+def oracle_families(mode):
+  if Path(runtime.TDIR, "test_modules", "m%05d.py" % mode).is_file() == False:
+    return []
+  constraints = oracle_constraints(mode)
+  if constraints is not None:
+    return [family for index, family in ((0, "pure"), (2, "optimized"))
+            if constraints[index] != [-1, -1]]
   return source_capabilities(mode)["kernel_types"]
+
+
+def oracle_salt_range(mode, kernel):
+  constraints = oracle_constraints(mode)
+  return tuple(constraints[1 if kernel == "pure" else 3]) if constraints is not None else None
 
 
 @lru_cache(maxsize=None)

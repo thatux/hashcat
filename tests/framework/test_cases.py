@@ -65,6 +65,28 @@ def test_recipe_edge_selection_retains_inside_kernel_attacks():
   assert {case.attack for case in selected if case.mode == 4000} == set(catalog.ATTACK_ORDER)
 
 
+def test_edge_association_multi_requires_distinct_oracle_salts():
+  config = Config(hash_modes="22000", attacks="all", kernels="both", widths="all", targets="all")
+  selected = cases.collect_cases(config, "edge")
+  assert len(selected) == 85
+  assert {(case.attack, case.width) for case in selected if case.target == "multi"} == {
+    (attack, width) for attack in catalog.ATTACK_ORDER if attack != 9 for width in catalog.EDGE_WIDTHS}
+  assert {case.width for case in selected if case.attack == 9 and case.target == "single"} == set(catalog.EDGE_WIDTHS)
+  config.options.update(hash_modes="10", attacks="9", targets="multi")
+  assert {(case.kernel, case.width) for case in cases.collect_cases(config, "edge")} == {
+    (kernel, width) for kernel in ("pure", "optimized") for width in catalog.EDGE_WIDTHS}
+
+
+@pytest.mark.parametrize("constraints,kernels", [
+  (None, {"pure", "optimized"}),
+  ([[0, 256], [0, 0], [0, 55], [8, 8], [0, 55]], {"optimized"}),
+])
+def test_edge_association_salt_capability_is_per_kernel_and_preserves_unknown(monkeypatch, constraints, kernels):
+  monkeypatch.setattr(catalog, "oracle_constraints", lambda mode: constraints)
+  selected = cases.collect_cases(Config(hash_modes="10", attacks="9", kernels="both", targets="multi"), "edge")
+  assert {case.kernel for case in selected} == kernels
+
+
 def test_selftest_only_normal_path_preserves_widths():
   config = Config(hash_modes="23800", attacks="all", kernels="pure", widths="1,4")
   selected = cases.collect_cases(config, "cracking")

@@ -69,6 +69,33 @@ def test_recovered_output_comparison_preserves_bytes_and_stdout_order():
   assert parity.normalize_output(b"second\nfirst\n", ordered=True) != parity.normalize_output(b"first\nsecond\n", ordered=True)
 
 
+def test_recovered_lines_between_status_reports_remain_comparable():
+  recovered = b"$gpg$*1*320*hash:pass\xea\xb0\x80\xff\n"
+  running = b"Session..........: pytest\nStatus...........: Running\nSpeed.#01........: 1 H/s\nHardware.Mon.#01.: N/A\n"
+  cracked = b"Session..........: pytest\nStatus...........: Cracked\nSpeed.#01........: 2 H/s\nHardware.Mon.#01.: N/A\n"
+  assert parity.normalize_output(running + recovered + cracked) == parity.normalize_output(recovered + cracked)
+  assert parity.normalize_output(running + recovered + cracked) == parity.normalize_output(recovered)
+  assert parity.normalize_output(running + recovered + cracked) != parity.normalize_output(cracked)
+  assert parity.normalize_output(running + recovered + cracked) != parity.normalize_output(recovered.replace(b"\xff", b"\xfe") + cracked)
+
+
+def test_status_looking_stdout_candidates_and_interleaved_diagnostics_are_preserved():
+  candidates = b"Session..........: word\nSTATUS\tword\n\n"
+  assert parity.normalize_output(candidates, ordered=True) == candidates
+  status = b"Session..........: pytest\nStatus...........: Running\n"
+  diagnostic = b"WARNING: unexpected backend condition\n"
+  assert parity.normalize_output(status + diagnostic) == parity.normalize_output(diagnostic)
+
+
+@pytest.mark.parametrize("device", [b"01", b"100", b"255"])
+def test_status_device_fields_preserve_minimum_width_numeric_ids(device):
+  status = b"Session..........: pytest\n"
+  for prefix, padding in ((b"Speed.#", 8), (b"Candidates.#", 3), (b"Hardware.Mon.#", 1), (b"Brain.Link.#", 3)):
+    status += prefix + device + b"." * padding + b": value\n"
+  status += b"Speed.#*.........: total\n"
+  assert parity.normalize_output(status + b"hash:pass\n") == parity.normalize_output(b"hash:pass\n")
+
+
 def test_mfulc_only_ignores_des_key_parity_bits():
   digest = b"$mfulc$1$3$0$0123456789abcdef$0123456789abcdef$0123456789abcdef$0123456789abcdef0123456789abcdef"
   line = digest + b":\xea\xb0\x804"
