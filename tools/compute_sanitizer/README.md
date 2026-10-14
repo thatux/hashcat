@@ -155,30 +155,22 @@ tools/compute_sanitizer/report.py                    # all runs in tools/compute
 tools/compute_sanitizer/report.py --test <name>       # filter by test name
 tools/compute_sanitizer/report.py --failed             # only runs with primary findings or a wrapper failure
 tools/compute_sanitizer/report.py --latest 5             # last 5, after other filters
-tools/compute_sanitizer/report.py --dir <sweep-dir>        # a test.py sweep's own results directory
+tools/compute_sanitizer/report.py --dir <sweep-dir>        # a pytest sweep's own results directory
 ```
 
 Prints a `RUN / HC_RC / SANITIZER / PRIMARY_ERR / FIRST LOCATION` table. A
 missing or malformed `summary.json` shows up as a flagged row (`?` /
 `<malformed>`) rather than crashing the whole listing.
 
-## Running from `tools/test.py`
+## Running from pytest
 
-```
-tools/test.py --edge -m 17010 -a 3 -V 1 --compute-sanitizer
-tools/test.py --edge -m 17010 --compute-sanitizer=initcheck
-tools/test.py --compute-sanitizer
+```sh
+python3 -m pytest tests/test_edge.py --hash-modes 17010 --attacks 3 --widths 1 --sanitizer memcheck
+python3 -m pytest tests/test_edge.py --hash-modes 17010 --sanitizer initcheck
+python3 -m pytest tests/test_cracking.py --hash-modes 17010 --sanitizer memcheck
 ```
 
-Requires `tools/compute_sanitizer/run.py build` to have been run first (both
-scripts check for `./hashcat-sanitizer` and exit with a clear error if it's
-missing). Each hashcat invocation is transparently routed through
-`tools/compute_sanitizer/sweep_shim.sh`, which wraps it in `run.py exec
---sweep`: hashcat's own stdout/stderr/exit code pass through completely
-untouched, so the scripts' existing pass/fail parsing is unaffected;
-Compute Sanitizer's own findings are written to a
-`tools/compute_sanitizer/results/sweep-<timestamp>/` directory instead,
-printed as a pointer at the end of the run.
+Build `./hashcat-sanitizer` with `tools/compute_sanitizer/run.py build` first. Pytest routes cracking through `sweep_shim.sh` and retains sanitizer reports under `pytest-artifacts/sanitizer/`. Missing or malformed reports and primary sanitizer findings fail the test even if hashcat returned success. Sanitizer execution is serial.
 
 **Performance, measured**: the same GPG mode 17010 example hash that took
 18+ minutes under the earlier PoCL+Valgrind fast tier ran in **~13 seconds**
@@ -187,7 +179,7 @@ candidate), roughly 80x faster, running on real hardware instead of
 emulating a GPU kernel on the CPU under Valgrind instrumentation. Ordinary
 kernel compiles (`ptxas`) were tens to hundreds of ms each, not minutes, and
 a full MD5 crack completed in under a second end to end. Use the existing
-scoping flags (`-m`/`-a`/`-V`) to bound a run when sweeping many modes;
+scoping flags (`--hash-modes`/`--attacks`/`--widths`) to bound a run when sweeping many modes.
 Compute Sanitizer's own overhead is still real (it instruments every device
 memory access), just nowhere near what CPU emulation cost.
 
@@ -198,7 +190,7 @@ tools/compute_sanitizer/
     run.py           # CLI: build / check / exec / selftest
     triage.py        # compute-sanitizer log parsing, classification, JSON schema
     report.py        # aggregates past runs into a table
-    sweep_shim.sh    # BIN indirection target for test.py --compute-sanitizer
+    sweep_shim.sh    # BIN indirection target for pytest --sanitizer
     modules/         # ground-truth self-test fixtures (see `run.py selftest` above)
     results/         # gitignored; one directory per run, never overwritten
 ```

@@ -82,7 +82,7 @@ The main program, `tools/test_module_runner.py`, loads the mode-specific Python 
 The test suite itself is two files:
 
 * `tools/test_module_runner.py` generates random passwords and salts, then loads the Python test module.
-* `tools/test.py` drives hashcat against the runner's output. On its own it compares reference hashes with hashcat output across several option combinations. `--edge` exercises password and salt length boundaries: it reads `module_constraints()`, generates the claimed minimum and maximum values, then tests every supported attack and kernel type. `--test-coverage` checks that every mode has a runnable oracle. `-g` builds a real container or archive and cracks that.
+* `pytest` runs native integration tests under `tests/`, consuming JSON Lines from the oracle runner and invoking hashcat directly. `tests/test_edge.py` covers declared password/salt boundaries, `tests/test_coverage.py` audits source coverage, and `--include-generated` enables real containers and archives.
 
 Name the test module `tools/test_modules/m[hash_mode].py`. It defines `module_constraints()`, `module_generate_hash()` and `module_verify_hash()`. Passwords use `bytes`, while hashes and salts use `str`, because `$HEX[...]` can decode to password bytes that are not text.
 
@@ -101,7 +101,7 @@ Script `tools/test_module_runner.py` supports six modes:
 
 The first command-line argument selects `edge`, `single`, `password`, `passthrough`, `potthrough` or `verify`.
 
-The three described below are the ones you will use while writing a module. Of the others, "edge" writes one comma separated record per length edge case, which `tools/test.py --edge` consumes, "password" prints one random password for the mode, which `tools/test.py -g` uses to build its containers, and "potthrough" is passthrough with the output written as hash:plain, the shape a potfile takes.
+The three described below are the ones you will use while writing a module. Of the others, "edge" writes one comma separated record per length edge case, which the edge tests consume (using `--json-lines` for byte-safe records), "password" prints one random password for the mode, which the generated-artifact tests use to build its containers, and "potthrough" is passthrough with the output written as hash:plain, the shape a potfile takes.
 
 Every Python test module implements three functions used by all runner modes:
 
@@ -207,24 +207,20 @@ Check that `test_module_runner.py` exits with status 0. A failure may leave an o
 
 Verify mode can serve as the proof of concept when no separate reference implementation exists.
 
-### test.py ###
+### Native pytest integration tests
 
-Script `test.py` uses single-mode output from `test_module_runner.py` to run the hashcat binary and compare its results with the reference values. It checks that all hashes crack with their corresponding passwords and that hash output retains the expected format.
+The tests under `tests/` use `test_module_runner.py --json-lines` to generate reference vectors, then invoke the compiled hashcat binary directly. They verify recovered hashes and plaintexts, including alternate valid passwords and mode-specific encodings. Pytest controls collection, fixtures, outcomes and reporting.
 
-Command-line options can restrict the test scope. Use them during development because a complete run across all hash modes can take several days.
+```sh
+python3 -m pip install -r tools/requirements.txt -r tests/requirements.txt
+python3 -m pytest tests/test_cracking.py --hash-modes 0 --attacks all --kernels both
+python3 -m pytest tests/test_edge.py --hash-modes 0
+python3 -m pytest tests/test_coverage.py
+```
 
-The main options:
+Add `--device-type cpu --force` on a CPU-only machine. The default cracking selection uses attack 0, widths 1 and 4, single and multi hashes, and optimized kernels where available, otherwise pure. `--hash-modes minimal` selects 24 representative modes. `--profile full` expands the suite, and `--include-generated` adds real artifacts. Privileged generators require `--allow-privileged`. Run the suite as yourself.
 
-* Select hash type (`-m`): test one hash mode.
-* Select test mode (`-t`): test either the single-hash or multi-hash kernel.
-* Select attack mode (`-a`): test one attack mode. A slow hash automatically uses a straight attack because it has no attack-specific kernels.
-* Minimal mode (`-M`): test 24 representative hash types covering the distinct code paths and logic branches.
-
-Without these options, the script runs attack mode 0 for hash mode 0. Run `tools/test.py --help` for the complete interface.
-
-`--edge` complements the randomized tests by generating boundary cases from each test module's constraints. It covers minimum and maximum password and salt lengths along with other declared limits, running every kernel type a mode supplies and every attack supported by that kernel. `-M` and `--minimal` restrict the run to the same 24 representative modes.
-
-`--test-coverage` checks that every mode has a runnable oracle without cracking anything. `-g` builds a real encrypted container (LUKS, TrueCrypt, VeraCrypt) or archive (GPG, PKZIP, RAR, 7-Zip, WinZip AES, PDF, OpenSSH key) with the format's own tool and cracks that; LUKS and TrueCrypt need `sudo`, the rest build as you.
+See [tools/README.md](../tools/README.md) for parallel scheduling, diagnostics, reproduction and all test families. Keep the Python oracle alongside each new mode and run its cracking and edge tests before submitting a patch.
 
 ## Module ##
 

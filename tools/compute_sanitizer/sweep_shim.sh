@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 ##
 ## Drop-in replacement for a plain `./hashcat` invocation, used by
-## tools/test.py --compute-sanitizer (including --edge)
+## pytest --sanitizer (including tests/test_edge.py)
 ## via their BIN/HC_BIN indirection. Wraps the real hashcat invocation in
 ## `run.py exec --sweep` (transparent stdout/stderr/exit-code passthrough,
 ## so the calling script's own pass/fail parsing is unaffected) and routes

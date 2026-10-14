@@ -157,7 +157,7 @@ def find_test(zfilled_key):
     ALL_MODES = TC_MODES + VC_MODES + LUKS_MODES + CL_MODES
 
     if zfilled_key in [m.zfill(5) for m in ALL_MODES]:
-        return f"[:white_check_mark:](/tools/test.py)"
+        return f"[:white_check_mark:](/tests/test_containers.py)"
 
     if os.path.isdir(TESTS_DIR):
         for filename in sorted(os.listdir(TESTS_DIR)):
@@ -218,12 +218,12 @@ def main():
         opencl_links = find_opencl(zfilled_key)
         test_link = find_test(zfilled_key)
 
-        # A mode whose test link points at test.py is one of the container modes: it is exercised
+        # A mode whose test link points at test_containers.py is one of the container modes: it is exercised
         # only against a crypto container, so note that its test needs a shipped or freshly built
         # container, not a hash the oracle makes from a password.
-        if test_link == "[:white_check_mark:](/tools/test.py)":
+        if test_link == "[:white_check_mark:](/tests/test_containers.py)":
             footnote_val = ("Tested only against a crypto container: a shipped test container or one "
-                            "built on the fly by tools/test.py. It has no example-hash oracle that "
+                            "built on the fly by pytest. It has no example-hash oracle that "
                             "runs without a container.")
             if footnote_val not in footnote_map:
                 footnote_map[footnote_val] = footnote_counter

@@ -7,18 +7,18 @@ Contributions written with an AI coding agent are welcome. This file is the part
 ## Build and test
 
     make                        # builds ./hashcat and libhashcat.so
-    ./tools/test.py --edge -m 0 # edge test for one mode
-    ./tools/test.py -h          # all options
+    python3 -m pytest tests/test_edge.py --hash-modes 0 # edge test for one mode
+    python3 -m pytest --help          # all options
 
-With only `-m`, the suite covers every attack type, kernel type, target type and vector width for that mode. Add `-D 1 -f` on a machine with no GPU, where hashcat runs on the CPU backend and needs `--force`.
+With only `--hash-modes`, the suite covers every attack type, kernel type, target type and vector width for that mode. Add `--device-type cpu --force` on a machine with no GPU, where hashcat runs on the CPU backend and needs `--force`.
 
-Hashcat caches compiled kernels. `test.py` does not touch `cache/kernels/`: it builds its kernels in a private cache path for each run (setup_isolation in tools/test.py), so it neither uses that cache nor clears it. When you run hashcat directly after a change under `OpenCL/`, run `rm -rf cache/kernels/` first, or you will measure the old binary and conclude the change did nothing.
+Hashcat caches compiled kernels. `pytest` does not touch `cache/kernels/`: it builds its kernels in a private cache path for each run (worker_resources in tests/hashcat_pytest/plugin.py), so it neither uses that cache nor clears it. When you run hashcat directly after a change under `OpenCL/`, run `rm -rf cache/kernels/` first, or you will measure the old binary and conclude the change did nothing.
 
 ## A build is not a result
 
 A kernel that compiles is not a kernel that works, and a self-test vector that passes is not a mode that cracks. A self-test vector is one input, often a degenerate one. It is entirely normal for it to pass while the mode is broken for everything else.
 
-Before you report a fix, run the reproduction command on both sides of the change, with `rm -rf cache/kernels/` in between if a kernel moved, and read the exit code. Before you report that nothing regressed, run `test.py --edge` for the modes you touched and for the modes that share the code you edited.
+Before you report a fix, run the reproduction command on both sides of the change, with `rm -rf cache/kernels/` in between if a kernel moved, and read the exit code. Before you report that nothing regressed, run `pytest tests/test_edge.py` for the modes you touched and for the modes that share the code you edited.
 
 ## Never present output you did not run
 

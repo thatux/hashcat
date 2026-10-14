@@ -1,0 +1,26 @@
+##
+## Author......: See docs/credits.txt
+## License.....: MIT
+##
+
+name: test coverage
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Test dependencies
+        run: pip install -r tests/requirements.txt
+      - name: Source coverage without a compiled binary
+        run: python3 -m pytest tests/test_coverage.py --hashcat-binary /no/compiled/hashcat

@@ -8,7 +8,7 @@
 # STDOUT. The kernel is empty (OpenCL/m02000_mxx is a no-op), so nothing is ever hashed and nothing
 # is ever cracked: the mode exists so --stdout has a kernel to borrow while it prints the candidate
 # stream the host produced. There is no digest to verify a crack against, so the test is a round
-# trip: the word that goes in must be the word that comes out. The driver (test.sh / test.py) runs
+# trip: the word that goes in must be the word that comes out. The STDOUT test runs
 # the words back through 'hashcat --stdout -a 0' and compares the output to them byte for byte.
 #
 # module_generate_hash returns the word as hex so every byte 0x00 to 0xff survives the vector line,

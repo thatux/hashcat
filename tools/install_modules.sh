@@ -65,7 +65,7 @@ if [ $? -eq 0 ]; then
 
     # Enable it where the suite actually runs, which is the repository root, not wherever this
     # script was started from. pyenv local writes .python-version into the current directory and
-    # applies to that directory and below, so a pin written in tools/ leaves test.py, which runs
+    # applies to that directory and below, so a pin written in tools/ leaves pytest, which runs
     # from the root, on the system python. The oracles then shell out to a bare python3 and get
     # one without pycryptodome:
     #
@@ -103,14 +103,14 @@ echo "> Installing python3 deps ..."
 # One file lists what the test modules import, so a contributor writing a module has one place
 # to read and one place to add to.
 
-pip3 install -r "${TOOLS_DIR}/requirements.txt"
+pip3 install -r "${TOOLS_DIR}/requirements.txt" -r "${TOOLS_DIR}/../tests/requirements.txt"
 ERRORS=$((ERRORS+$?))
 
 # A python import that fails inside a test module is invisible from here. The module shells out
 # to python3 and reads stdout only, so a dead dependency produces a wrong hash rather than an
 # error. Import each one now, while the cause is still in front of you.
 
-PYTHON_MODULES="Crypto cryptography argon2 gostcrypto crypt_r"
+PYTHON_MODULES="Crypto cryptography argon2 gostcrypto crypt_r pytest xdist"
 
 for python_module in ${PYTHON_MODULES}; do
 

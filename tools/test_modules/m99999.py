@@ -13,7 +13,7 @@ from lib.test_helpers import split_hash_word
 # not meant to be: with the hash equal to the plaintext there is no such thing as an invalid hash,
 # so both engines accept the same lines. The perl oracle behaves identically.
 #
-# The suite assumes a hash is 7 bit ASCII (test.py decodes it as ASCII), and here the hash is the
+# The suite assumes a hash is 7 bit ASCII (the adapter decodes it as ASCII), and here the hash is the
 # plaintext, so the plaintext has to be ASCII as well. Defining module_get_random_password makes the
 # runner's non_ascii_supported () pin the generated password to ASCII.
 

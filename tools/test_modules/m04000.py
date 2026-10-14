@@ -9,7 +9,7 @@ import hashlib
 
 from lib.test_helpers import split_hash_word
 
-# Mode 4000 needs --hash-recipe, which test.py supplies on every run. This recipe combines one
+# The runner supplies --hash-recipe for mode 4000. This recipe combines one
 # little endian family with two big endian families. It tests uppercase hex chaining with ^2,
 # raw output, hex slices starting at zero and at an offset, both string quote styles, and
 # transformed copies of the password and salt. The input always exceeds one block, covering
