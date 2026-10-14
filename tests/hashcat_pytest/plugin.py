@@ -53,6 +53,7 @@ def pytest_configure(config):
   config.pluginmanager.register(Summary(config), "hashcat-summary")
   config._hashcat_executed = set()
   config._hashcat_reported_modes = set()
+  config._hashcat_case_modes = {}
   config._hashcat_missing_modes = set()
   config._hashcat_allocations = {}
   config._hashcat_resource_dir = None
@@ -150,9 +151,11 @@ def pytest_xdist_node_collection_finished(node, ids):
   selected = set()
   planned = 0
   for identifier in ids:
-    mode = identifier.rpartition("[")[2].split("-", 1)[0].rstrip("]")
+    mode = identifier.rpartition("[")[2].partition("]")[0].split("-", 1)[0]
     if mode.startswith("m") and mode[1:].isdigit():
-      selected.add(int(mode[1:]))
+      value = int(mode[1:])
+      selected.add(value)
+      node.config._hashcat_case_modes[identifier] = value
       planned += 1
   node.config._hashcat_selected_modes = selected
   node.config._hashcat_planned_cases = planned
@@ -172,24 +175,25 @@ def worker_resources(request, tmp_path_factory):
   runtime.ISOLATION = ["--cache-path", str(cache), "--session", "pytest-%d" % os.getpid(), "--restore-disable"]
   device = {"cpu": "1", "gpu": "2", "fpga": "3"}[config.getoption("device_type")]
   selected = config.getoption("backend_devices")
-  inventory = hardware.backend_devices()
-  runtime.CPU_BACKEND_ID = next((entry["id"] for entry in inventory if entry["type"] == "CPU"), None)
   modes = getattr(config, "_hashcat_selected_modes", set())
   suites = getattr(config, "_hashcat_selected_suites", set())
+  stdout_only = suites == {"stdout"}
+  inventory = [] if stdout_only else hardware.backend_devices()
+  runtime.CPU_BACKEND_ID = next((entry["id"] for entry in inventory if entry["type"] == "CPU"), None)
   if runtime.CPU_BACKEND_ID is not None and (suites == {"bridge"} or (modes and all(catalog.is_bridged(mode) for mode in modes))):
     device, selected = "1", None
   devices = scheduling.physical_devices(inventory, device, selected)
-  if not devices:
+  if not devices and stdout_only == False:
     reason = "selected backend devices are unavailable"
     if config.getoption("require_coverage"):
       pytest.fail(reason)
     pytest.skip(reason)
   workers = worker.get("workercount", 1)
-  if device == "2" and config.getoption("gpu_strategy") == "depth" and "hashcat_gpu_slot" in worker:
+  if stdout_only == False and device == "2" and config.getoption("gpu_strategy") == "depth" and "hashcat_gpu_slot" in worker:
     if workers > len(devices):
       pytest.fail("GPU depth scheduling needs one physical GPU per worker")
     selected = str(devices[worker["hashcat_gpu_slot"]]["id"])
-  limits = scheduling.memory_limits(device, workers, selected, inventory)
+  limits = {} if stdout_only else scheduling.memory_limits(device, workers, selected, inventory)
   runtime.ENV = dict(limits, HCTEST_SEED=config._hashcat_seed)
   runtime.RUNTIME = config.getoption("runtime") or 400
   runtime.EDGE_RUNTIME = config.getoption("runtime") or 270
@@ -203,7 +207,7 @@ def worker_resources(request, tmp_path_factory):
                        SANITIZER_SWEEP_DIR=str(Path(config.getoption("artifact_dir")).resolve() / "sanitizer"))
   if device == "2" and config.getoption("gpu_strategy") == "depth":
     runtime.ENV.pop("HASHCAT_DEVICE_MEM_LIMIT", None)
-  depth_ids = [entry["id"] for entry in scheduling.physical_devices(inventory, device, selected)] if device == "2" and config.getoption("gpu_strategy") == "depth" else []
+  depth_ids = [entry["id"] for entry in scheduling.physical_devices(inventory, device, selected)] if stdout_only == False and device == "2" and config.getoption("gpu_strategy") == "depth" else []
   return SimpleNamespace(directory=resource_dir, device=device, backend_devices=selected, workers=workers, depth_ids=depth_ids)
 
 
@@ -312,6 +316,14 @@ class Summary:
     self.config = config
     self.failures = []
 
+  @pytest.hookimpl(optionalhook=True)
+  def pytest_handlecrashitem(self, crashitem, report):
+    mode = self.config._hashcat_case_modes.get(crashitem)
+    if mode is None:
+      return
+    report.user_properties.extend([("hashcat_mode", mode), ("hashcat_invocations", 0),
+                                   ("hashcat_retried", 0), ("hashcat_worker_crash", True)])
+
   def pytest_runtest_logreport(self, report):
     if dict(report.user_properties).get("hashcat_coverage_gate"):
       self.config._hashcat_counts["coverage_failures"] += 1
@@ -325,6 +337,8 @@ class Summary:
     if "hashcat_mode" not in properties:
       return
     self.config._hashcat_reported_modes.add(properties["hashcat_mode"])
+    if properties.get("hashcat_worker_crash"):
+      self.config._hashcat_counts["crashed"] += 1
     if report.failed:
       self.failures.append((report.nodeid, str(report.longrepr)))
     if report.failed and os.environ.get("GITHUB_ACTIONS") == "true":
@@ -345,6 +359,8 @@ class Summary:
       terminalreporter.write_line("hashcat: %d invocations, %d passed, %d failed, %d skipped, %d retried" %
                                 tuple(counts[key] for key in ("invocations", "passed", "failed", "skipped", "retried")))
       terminalreporter.write_line("Errors detected: %d" % (counts["failed"] + counts["coverage_failures"]))
+      if counts["crashed"]:
+        terminalreporter.write_line("hashcat: %d worker crashes, invocation count is incomplete" % counts["crashed"])
     if self.config._hashcat_missing_modes:
       terminalreporter.write_line("Required modes without a passed invocation: " + str(sorted(self.config._hashcat_missing_modes)))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -353,6 +369,8 @@ class Summary:
         handle.write("\n### hashcat integration tests\n\n")
         handle.write("%d planned cases, %d invocations, %d passed, %d failed, %d skipped, %d retried.\n" %
                      (self.config._hashcat_planned_cases, *(counts[key] for key in ("invocations", "passed", "failed", "skipped", "retried"))))
+        if counts["crashed"]:
+          handle.write("\nWorker crashes: %d. Invocation count is incomplete.\n" % counts["crashed"])
         if self.config._hashcat_missing_modes:
           handle.write("\nRequired modes without a passed invocation: " + str(sorted(self.config._hashcat_missing_modes)) + "\n")
         for identifier, reason in self.failures:

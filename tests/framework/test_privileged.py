@@ -55,7 +55,10 @@ def cleaning():
       alive = stat.rpartition(")")[2].split()[0] != "Z"
     except FileNotFoundError:
       pass
-  (directory / "cleanup-started").write_text(json.dumps({"allocation_alive": alive}))
+  marker = directory / "cleanup-started"
+  temporary = marker.with_suffix(".tmp")
+  temporary.write_text(json.dumps({"allocation_alive": alive}))
+  temporary.replace(marker)
   if os.environ.get("BLOCK_CLEANUP"):
     while not (directory / "allow-cleanup").exists():
       time.sleep(0.01)

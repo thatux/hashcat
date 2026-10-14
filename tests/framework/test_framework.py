@@ -277,6 +277,92 @@ with open(path, "a+b") as resource:
         pass
 
 
+@pytest.mark.parametrize("suite,mode", [("cracking", 0), ("bridge", 0), ("stdout", 2000)])
+def test_worker_crash_is_counted_and_annotated(pytester, monkeypatch, suite, mode):
+  import xml.etree.ElementTree as element_tree
+
+  monkeypatch.setenv("PYTHONPATH", str(Path(runtime.ROOT, "tests")))
+  monkeypatch.setenv("GITHUB_ACTIONS", "true")
+  summary = pytester.path / "summary.md"
+  monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+  options = configure_pytester(pytester)
+  binary = fake_binary(pytester)
+  pytester.makepyfile('''
+import os
+from pathlib import Path
+from hashcat_pytest import execution, runtime
+SUITE = %r
+
+def test_crash(case, run_case):
+  marker = Path("crashed-worker")
+  if marker.exists() == False:
+    marker.touch()
+    os._exit(42)
+  def action(args, directory, ledger):
+    result = execution.run_command([runtime.BIN])
+    ledger.check(result.returncode)
+  run_case(action)
+''' % suite)
+  result = pytester.runpytest_subprocess(*options, "--widths", "1,4", "--hashcat-binary", binary,
+                                       "--hash-modes", str(mode),
+                                       "--profile", "full", "--kernels", "optimized", "--attacks", "0",
+                                       "--require-coverage", "-n", "1", "--dist", "loadgroup",
+                                       "--max-worker-restart", "1", "--junitxml", "results.xml")
+  result.assert_outcomes(passed=2 if suite == "cracking" else 1, failed=1)
+  result.stdout.fnmatch_lines(["*::error title=hashcat mode %d::*" % mode, "*Errors detected: 1*",
+                              "*1 worker crashes, invocation count is incomplete*"])
+  assert "Worker crashes: 1. Invocation count is incomplete." in summary.read_text()
+  errors = element_tree.parse(pytester.path / "results.xml").findall(".//testcase/error")
+  assert len(errors) == 1
+  assert "crashed" in errors[0].get("message")
+
+
+@pytest.mark.parametrize("suite,mode", [("bridge", 0), ("stdout", 2000)])
+def test_mode_only_ids_enforce_parallel_coverage(pytester, monkeypatch, suite, mode):
+  monkeypatch.setenv("PYTHONPATH", str(Path(runtime.ROOT, "tests")))
+  options = configure_pytester(pytester)
+  binary = fake_binary(pytester)
+  pytester.makepyfile('''
+from hashcat_pytest import execution, runtime
+SUITE = %r
+
+def test_skip(case, run_case):
+  def action(args, directory, ledger):
+    runtime.ENV["FAKE_RC"] = "252"
+    result = execution.run_command([runtime.BIN])
+    ledger.check(result.returncode)
+  run_case(action)
+''' % suite)
+  result = pytester.runpytest_subprocess(*options, "--hash-modes", str(mode), "--hashcat-binary", binary,
+                                       "--profile", "full", "--kernels", "optimized",
+                                       "--require-coverage", "-n", "1", "--dist", "loadgroup")
+  result.assert_outcomes(skipped=1, failed=1)
+  result.stdout.fnmatch_lines(["*hashcat: 1 planned cases*", "*Errors detected: 1*"])
+
+
+def test_stdout_does_not_require_gpu_inventory(pytester, monkeypatch):
+  monkeypatch.setenv("PYTHONPATH", str(Path(runtime.ROOT, "tests")))
+  options = configure_pytester(pytester)
+  pytester.makepyfile(Path(runtime.ROOT, "tests", "test_stdout.py").read_text())
+  binary = pytester.path / "hashcat-stdout"
+  binary.write_text("#!" + sys.executable + "\n" + '''
+from pathlib import Path
+import sys
+if "-HH" in sys.argv:
+  print("Kernel.Type(s): pure")
+  raise SystemExit(0)
+if "--stdout" not in sys.argv:
+  raise SystemExit("STDOUT should not query or initialize a device backend")
+words = next(Path(arg) for arg in sys.argv[1:] if Path(arg).is_file())
+sys.stdout.buffer.write(words.read_bytes())
+''')
+  binary.chmod(0o755)
+  result = pytester.runpytest_subprocess(*options, "--hash-modes", "2000", "--device-type", "gpu",
+                                       "--hashcat-binary", str(binary), "--require-coverage", "-n", "2", "--dist", "loadgroup")
+  result.assert_outcomes(passed=1)
+  result.stdout.fnmatch_lines(["*hashcat: 1 planned cases*", "*Errors detected: 0*"])
+
+
 def test_required_coverage_allows_a_genuine_partial_memory_skip(pytester, monkeypatch):
   import xml.etree.ElementTree as element_tree
 
