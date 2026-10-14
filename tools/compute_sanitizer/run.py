@@ -290,7 +290,7 @@ def cmd_exec(ns, sanitizer_passthrough, hc_cmd):
     base.mkdir(parents=True, exist_ok=True)
     run_dir, ts = make_results_dir(base, ns.test_name)
 
-    (run_dir / "command.txt").write_text("\n".join(hc_cmd) + "\n")
+    (run_dir / "command.txt").write_text("\n".join(hc_cmd) + "\n", errors="backslashreplace")
     write_environment_file(run_dir / "environment.txt", hc_bin_resolved, debug_ok, device)
 
     log_path = run_dir / "sanitizer.log"
@@ -311,17 +311,17 @@ def cmd_exec(ns, sanitizer_passthrough, hc_cmd):
     cs_cmd += hc_cmd
 
     try:
-        proc = subprocess.run(cs_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.run(cs_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except (OSError, subprocess.SubprocessError) as e:
         print(f"ERROR: failed to invoke compute-sanitizer: {e}", file=sys.stderr)
         return 2
 
-    (run_dir / "stdout.txt").write_text(proc.stdout)
-    (run_dir / "stderr.txt").write_text(proc.stderr)
+    (run_dir / "stdout.txt").write_bytes(proc.stdout)
+    (run_dir / "stderr.txt").write_bytes(proc.stderr)
 
     if ns.sweep:
-        sys.stdout.write(proc.stdout)
-        sys.stderr.write(proc.stderr)
+        sys.stdout.buffer.write(proc.stdout)
+        sys.stderr.buffer.write(proc.stderr)
 
     rc = proc.returncode
     hashcat_rc_raw = (128 - rc) if rc < 0 else rc
@@ -456,7 +456,7 @@ def build_exec_parser():
                          "land inside a neighboring allocation is still flagged instead of going silent "
                          "(default: 128; 0 disables it, matching compute-sanitizer's own default)")
     p.add_argument("--sweep", action="store_true",
-                    help="non-interactive mode for test.py: hashcat's stdout/stderr/exit-code "
+                    help="non-interactive mode for pytest: hashcat's stdout/stderr/exit-code "
                          "pass through untouched; requires --results-dir")
     p.add_argument("--results-dir", default=None)
     return p

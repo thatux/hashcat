@@ -22,8 +22,12 @@ import re
 import subprocess
 import sys
 import zlib
+from pathlib import Path
 
-# test.py takes about 100 minutes on the largest of 16 shards on a 12 core laptop, which on a 4 core
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
+from hashcat_pytest.catalog import CONTAINER_MODES, MINIMAL_MODES, oracle_families
+
+# pytest takes about 100 minutes on the largest of 16 shards on a 12 core laptop, which on a 4 core
 # runner is too close to the 330 minute job limit, so it gets three times the shards fuzz does
 
 SHARDS = {"test": 48, "fuzz": 16, "container": 16}
@@ -33,13 +37,11 @@ SHARDS = {"test": 48, "fuzz": 16, "container": 16}
 
 PR_MODE_CAP = {"test": 30, "fuzz": 20}
 
-# A shared-code test change runs the -M set, 24 representative modes (test.py handles the container
+# A shared-code test change runs the -M set, 24 representative modes (pytest handles the container
 # families now, so they go through the normal per-mode path). Run in one job it is ~17 minutes, so
 # split it into shards balanced by a rough per-mode cost: the container and slow-KDF modes dominate,
 # 14600 most of all because it loops ~72 LUKS files. Anything unlisted costs 1.
 
-MINIMAL_MODES  = [0, 100, 110, 400, 500, 2600, 3000, 3200, 6211, 11600, 12500, 13711, 14200, 14511,
-                  14600, 14900, 15400, 15700, 20510, 22000, 29511, 33000, 33500, 34100]
 MINIMAL_WEIGHT = {14600: 12, 13711: 6, 3200: 4, 34100: 3, 29511: 3, 6211: 2, 14511: 2, 400: 2, 500: 2}
 MINIMAL_SHARDS = 6
 
@@ -72,7 +74,7 @@ _HOST_ENGINE = {}
 
 def host_engine(mode):
     # True when the module hashes on the host rather than in the kernel, read off the module source the
-    # way tools/test.py does. Cached, since a PR asks about several.
+    # way the pytest catalog does. Cached, since a PR asks about several.
     if mode not in _HOST_ENGINE:
         try:
             with open("src/modules/module_%05d.c" % mode, "rb") as fh:
@@ -129,25 +131,24 @@ def balance_shards(modes, n):
 
 
 def test_matrix(groups, kinds):
-    # One matrix entry per shard of modes and kernel kind. kinds is a subset of ("opt", "pure",
-    # "bridge"): the test job runs the optimized kernels for "opt", the pure kernels for "pure", and
-    # the Python bridge for "bridge". The kinds are separate parallel jobs rather than passes in one,
-    # so running several does not add their times in a single shard. The shard number is only a label
-    # here (unlike fuzz, which keys its corpus off it); the kind is appended to the name so the jobs
-    # of a shard are told apart in the run list.
-    return [{"name": "shard-%d-%s" % (i, kind), "shard": i, "kind": kind,
-             "modes": " ".join(str(m) for m in group)}
-            for kind in kinds
-            for i, group in enumerate(groups)]
+  # One matrix entry per shard of modes and kernel kind. kinds is a subset of ("opt", "pure",
+  # "bridge"): the test job runs the optimized kernels for "opt", the pure kernels for "pure", and
+  # the Python bridge for "bridge". The kinds are separate parallel jobs rather than passes in one,
+  # so running several does not add their times in a single shard. The shard number is only a label
+  # here (unlike fuzz, which keys its corpus off it); the kind is appended to the name so the jobs
+  # of a shard are told apart in the run list.
+  matrix = []
+  for kind in kinds:
+    for i, group in enumerate(groups):
+      supported = [mode for mode in group if kind != "pure" or "pure" in oracle_families(mode)]
+      if supported:
+        matrix.append({"name": "shard-%d-%s" % (i, kind), "shard": i, "kind": kind,
+                       "modes": " ".join(str(mode) for mode in supported)})
+  return matrix
 
 
 def container_modes():
-    # The container test modes crack a shipped or fetched container file and have no test module, so
-    # modes_on_disk cannot find them. Ask test.py, which owns the list, rather than duplicate it here.
-    out = subprocess.run([sys.executable, "tools/test.py", "--list-container-modes"],
-                         stdout=subprocess.PIPE, check=True).stdout.decode()
-
-    return {int(m) for m in out.split()}
+    return set(CONTAINER_MODES)
 
 
 def container_matrix(groups):
@@ -158,7 +159,7 @@ def container_matrix(groups):
             for i, group in enumerate(groups)]
 
 # A PR that touches shared code, but no mode of its own, still gets a run:
-# test.py -M for the kernels, and the starting set of parser targets for fuzz.
+# the representative mode set for the kernels, and the starting set of parser targets for fuzz.
 # That starting set is FUZZ_MODES in tools/fuzz/build.sh, where the reason for
 # each mode is written down, and it is read from there so the two cannot drift.
 
@@ -182,10 +183,11 @@ FUZZ_SHARED = re.compile(r"^(src/(rp|rp_cpu|parser|memory|convert|shared|paw64|t
                          r"|include/.*|tools/fuzz/.*|tools/asan/hashconfig\.[ch]"
                          r"|\.github/workflows/(fuzz\.yml|fuzz_report\.py|ci_matrix\.py))$")
 
-# Everything test.py builds on or runs through that does not belong to one mode.
+# Everything pytest builds on or runs through that does not belong to one mode.
 
-TEST_SHARED = re.compile(r"^(OpenCL/.*|src/.*|include/.*|deps/.*|Makefile|tools/test\.py"
-                         r"|tools/test_module_runner\.py|tools/test_modules/lib/.*"
+TEST_SHARED = re.compile(r"^(OpenCL/.*|src/.*|include/.*|deps/.*|Makefile|tests/.*|pytest\.ini"
+                         r"|tools/test_module_runner\.py|tools/test_bridge\.py|tools/test_modules/lib/.*"
+                         r"|tools/compute_sanitizer/.*|tools/asan/gpu_sweep\.sh"
                          r"|tools/install_modules\.sh|tools/requirements\.txt"
                          r"|\.github/workflows/(test\.yml|ci_matrix\.py))$")
 
@@ -379,7 +381,7 @@ def main():
         note = f"{len(impacted)} impacted modes"
 
         if shared:
-            note += (f", minimal full-test (test.py -M) in {MINIMAL_SHARDS} shards"
+            note += (f", minimal full-test (the representative mode set) in {MINIMAL_SHARDS} shards"
                      if kind == "test" else ", shared code changed")
 
         notes.append(note)

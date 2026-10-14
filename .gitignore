@@ -55,7 +55,7 @@ include/CL
 tools/luks_tests
 tools/luks2_tests
 .vscode
-test_edge*
+/test_edge*
 
 # tools/test.sh names its working directory test_<unix timestamp> and leaves it in the repository
 # root. Anchored and restricted to digits on purpose: a bare test_* would also match
@@ -103,3 +103,8 @@ __pycache__/
 /fuzz_out/
 /corpus/
 /crashes/
+
+# Native integration test outputs
+.pytest_cache/
+pytest-artifacts/
+pytest-results*.xml

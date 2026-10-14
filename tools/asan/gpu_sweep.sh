@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run tools/test.py against an ASan-instrumented hashcat, one hash type at a
+# Run pytest against an ASan-instrumented hashcat, one hash type at a
 # time. Unlike tools/compute_sanitizer/, which checks the CUDA kernels, this
 # checks hashcat's own host C under a real end-to-end workload: allocation
 # handling, the parsers, backend bookkeeping.
@@ -56,13 +56,15 @@ export ASAN_OPTIONS="protect_shadow_gap=0:detect_leaks=0:halt_on_error=0:use_sig
 # the options so they carry a stack trace and do not halt the run.
 export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0:use_sigaltstack=0"
 
+failed=0
+
 for mode in $MODES; do
   [ -z "$mode" ] && continue
 
   start=$(date +%s)
-  # < /dev/null is belt and suspenders: test.py feeds hashcat over a pipe and does
+  # < /dev/null is belt and suspenders: pytest feeds hashcat over a pipe and does
   # not read the sweep's stdin, but keeping it costs nothing and matches the loop.
-  timeout 1800 python3 ./tools/test.py -m "$mode" -a all -V 1 -t single -f \
+  timeout 1800 python3 -m pytest tests/test_cracking.py tests/test_containers.py tests/test_stdout.py --hash-modes "$mode" --attacks all --widths 1 --targets single --force --require-coverage \
     > "$OUT/m${mode}.out" 2>&1 < /dev/null
   rc=$?
   dur=$(( $(date +%s) - start ))
@@ -79,6 +81,7 @@ for mode in $MODES; do
   uerrs=$(grep -c "runtime error:" "$OUT/m${mode}.out" 2>/dev/null)
 
   if [ "${errs:-0}" -gt 0 ] || [ "${uerrs:-0}" -gt 0 ]; then
+    failed=1
     echo "m${mode}: *** ${errs} ASAN / ${uerrs} UBSAN ERRORS *** (${dur}s, rc=$rc)" | tee -a "$LOG"
     grep -h -oP "ERROR: AddressSanitizer: \K.*" "$OUT"/logs/asan.* 2>/dev/null \
       | sort -u | head -5 | sed 's/^/    /' | tee -a "$LOG"
@@ -88,7 +91,11 @@ for mode in $MODES; do
     mv "$OUT"/logs/asan.* "$OUT/findings/m${mode}/" 2>/dev/null
     [ "${uerrs:-0}" -gt 0 ] && cp "$OUT/m${mode}.out" "$OUT/findings/m${mode}/" 2>/dev/null
   elif [ "$rc" = "124" ]; then
+    failed=1
     echo "m${mode}: TIMEOUT (1800s)" | tee -a "$LOG"
+  elif [ "$rc" -ne 0 ]; then
+    failed=1
+    echo "m${mode}: TEST FAILED (${dur}s, rc=$rc)" | tee -a "$LOG"
   else
     echo "m${mode}: clean (${dur}s)" >> "$LOG"
   fi
@@ -103,3 +110,5 @@ grep -c ": clean"     "$LOG" | sed 's/^/clean modes:         /' | tee -a "$LOG"
 # one (including pure-ASan lines, which still print "0 UBSAN ERRORS"), whereas
 # "ASAN ERRORS" is not a substring of that line and always counted 0.
 grep -c "UBSAN ERRORS" "$LOG" | sed 's/^/modes with findings: /' | tee -a "$LOG"
+
+exit "$failed"
