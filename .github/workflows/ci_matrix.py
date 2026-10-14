@@ -135,7 +135,7 @@ def test_matrix(groups, kinds):
   # "bridge"): the test job runs the optimized kernels for "opt", the pure kernels for "pure", and
   # the Python bridge for "bridge". The kinds are separate parallel jobs rather than passes in one,
   # so running several does not add their times in a single shard. The shard number is only a label
-  # here (unlike fuzz, which keys its corpus off it); the kind is appended to the name so the jobs
+  # here (unlike fuzz, which keys its corpus off it). The kind is appended to the name so the jobs
   # of a shard are told apart in the run list.
   matrix = []
   for kind in kinds:

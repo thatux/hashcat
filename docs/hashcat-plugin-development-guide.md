@@ -79,7 +79,7 @@ A proof of concept that exposes intermediate values is essential for low-level d
 
 The main program, `tools/test_module_runner.py`, loads the mode-specific Python code at runtime through a standard interface. Existing test modules are useful references. In many cases you can copy a test module for a similar format, change its algorithm and parsing, and use it both as the proof of concept and as the permanent test.
 
-The test suite itself is two files:
+The test suite itself has two layers:
 
 * `tools/test_module_runner.py` generates random passwords and salts, then loads the Python test module.
 * `pytest` runs native integration tests under `tests/`, consuming JSON Lines from the oracle runner and invoking hashcat directly. `tests/test_edge.py` covers declared password/salt boundaries, `tests/test_coverage.py` audits source coverage, and `--include-generated` enables real containers and archives.
