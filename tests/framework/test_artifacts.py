@@ -70,7 +70,7 @@ def test_bridge_vector_reproduction_preserves_repository_paths(tmp_path):
   assert case_directory.exists() == False
 
 
-def test_private_home_replay(tmp_path):
+def test_private_home_replay(tmp_path, monkeypatch):
   if not hasattr(socket, "AF_UNIX"):
     pytest.skip("private-home socket snapshot check needs Unix sockets")
   case_directory = tmp_path / "case"
@@ -96,7 +96,9 @@ sys.stdout.buffer.write(os.fsencode(password) + b":" + data)
   command = [sys.executable, "-c", script, "--homedir", str(home), "--output=" + str(output),
              "--passphrase", str(home)]
   with socket.socket(socket.AF_UNIX) as agent_socket:
-    agent_socket.bind(str(home / "agent"))
+    with monkeypatch.context() as patch:
+      patch.chdir(home)
+      agent_socket.bind("agent")
     folder, original = saved_tool(tmp_path, command, {}, case_directory)
   record = json.loads((folder / "tool-0000" / "result.json").read_text())
   snapshot = folder / record["inputs"][str(home)]
