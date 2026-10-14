@@ -27,8 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"))
 from hashcat_pytest.catalog import CONTAINER_MODES, MINIMAL_MODES, oracle_families
 
-# pytest takes about 100 minutes on the largest of 16 shards on a 12 core laptop, which on a 4 core
-# runner is too close to the 330 minute job limit, so it gets three times the shards fuzz does
+# Use three times the fuzz shards to keep CPU testing within the 330 minute job limit.
 
 SHARDS = {"test": 48, "fuzz": 16, "container": 16}
 

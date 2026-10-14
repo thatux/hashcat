@@ -272,6 +272,10 @@ EDGE_SKIP_MODES = {2000}
 EDGE_SKIP_OUT_MATCH = {14000, 14100, 22000, 22001, 31500, 31600}
 
 
+# DES recovery may clear the top bit of each plaintext byte, so verify equivalent spellings.
+EDGE_VERIFY_OUT = {1500}
+
+
 EDGE_SKIP_SAME_SALT = {6600, 7100, 7200, 8200, 13400, 15300, 15310, 15900, 15910, 16900,
                        18300, 18900, 20200, 20300, 20400, 27000, 27100, 29700, 29930, 29940}
 

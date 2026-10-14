@@ -65,3 +65,18 @@ def edge_sort_lines(data):
 
 def edge_strip_userpw(data):
   return re.sub(rb"    \(user password[^\n]*", b"", data)
+
+
+def edge_out_verifies(mode, raw, hashes, tmp):
+  if mode not in catalog.EDGE_VERIFY_OUT:
+    return False
+  lines = edge_strip_userpw(raw).rstrip(b"\n").split(b"\n")
+  if len(lines) != len(hashes):
+    return False
+  for digest in hashes:
+    hits = [line for line in lines if line.startswith(digest + b":")]
+    if len(hits) != 1:
+      return False
+    if run_verify(mode, digest.decode("ascii"), hits, tmp) == False:
+      return False
+  return True

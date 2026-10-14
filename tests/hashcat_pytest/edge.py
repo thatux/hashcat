@@ -237,6 +237,8 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
     got  = verification.edge_echo_norm(verification.edge_strip_userpw(raw))
     want = verification.edge_echo_norm(hash_out + b":" + (word_compare if word_compare is not None else word))
     if got != want:
+      if verification.edge_out_verifies(ctx.mode, raw, [hash_out], tmp):
+        continue
       errors += 1
       print("[ edge ] !> mismatch Type %d, Attack %d, Kernel %s, Vector %d, Test %d, single"
             % (ctx.mode, ctx.attack, ctx.ktype, width, i))
@@ -381,6 +383,8 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
   got  = verification.edge_sort_lines(verification.edge_strip_userpw(raw).rstrip(b"\n") + b"\n")
   want = verification.edge_sort_lines(b"".join(l + b"\n" for l in hcout))
   if got != want:
+    if verification.edge_out_verifies(mode, raw, [dig for _, _, _, dig in selected], tmp):
+      return 0, 1, False
     print("[ edge ] !> mismatch Type %d, Attack %d, Kernel %s, Vector %d, multi"
           % (mode, attack, ctx.ktype, width))
     return 1, 1, False
