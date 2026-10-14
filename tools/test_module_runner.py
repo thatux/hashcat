@@ -14,8 +14,10 @@
 # into source, a command line or a format string, so a quote, a dollar or a percent in it means
 # nothing anywhere on the path.
 
+import base64
 import glob
 import importlib
+import json
 import os
 import random
 import re
@@ -27,6 +29,8 @@ sys.path.insert(0, os.path.join(TDIR, "test_modules"))
 
 from lib import test_helpers  # noqa: E402
 from lib.test_helpers import random_number, random_numeric_string  # noqa: E402
+
+JSON_LINES = "--json-lines" in sys.argv
 
 SINGLE_OUTPUTS = 8
 GIVEUP_AT      = 1000000
@@ -269,7 +273,7 @@ def usage_exit():
     " {0} passthrough <mode> [iter]\n"
     " {0} potthrough  <mode> [iter]\n"
     " {0} verify      <mode> <hashfile> <cracksfile> <outfile>\n"
-    "\n".format(name))
+    "\nAdd --json-lines to single, spare or edge for versioned base64 records.\n".format(name))
 
   sys.exit(1)
 
@@ -417,9 +421,13 @@ def edge_format(mod, mode, word_len, salt_len, attack_type, optimized, non_ascii
   # unbalance the quoting around it. Hex contains neither, so a field stays separable whatever the
   # module puts in it, and the consumer decodes rather than parses.
 
-  sys.stdout.write("%d,%d,%d,%d,%d,%s,%s,%s\n" % (
-    mode, attack_type, 1 if optimized else 0, word_len, salt_len,
-    word.hex(), salt.encode("ascii").hex(), digest.encode("utf-8").hex()))
+  if JSON_LINES:
+    emit_vector(mode, word, digest, optimized, attack=attack_type,
+                word_len=word_len, salt_len=salt_len, salt_b64=encode_bytes(salt.encode("ascii")))
+  else:
+    sys.stdout.write("%d,%d,%d,%d,%d,%s,%s,%s\n" % (
+      mode, attack_type, 1 if optimized else 0, word_len, salt_len,
+      word.hex(), salt.encode("ascii").hex(), digest.encode("utf-8").hex()))
 
 
 def edge(mod, mode, attack_type, optimized):
@@ -580,7 +588,7 @@ def single(mod, mode, length, spare=False):
   pairs = []
   lens  = []
 
-  # tools/test.py loads all of these at once in its multi-hash run, so it says what -HH declares about
+  # The integration suite loads all of these at once in its multi-hash run, so it says what -HH declares about
   # several hashes on one salt: UNIQUE_SALT for a mode that refuses them, SHARED_SALT for one that
   # allows them, so that the run tests it. A spare is one vector, so it shares nothing.
 
@@ -715,8 +723,11 @@ def single(mod, mode, length, spare=False):
       sys.exit("module_verify_hash did not round trip module_generate_hash for mode %d\n  %r\n"
                % (mode, line))
 
-    sys.stdout.buffer.write(b"echo %-31s | ./hashcat ${OPTS} -a 0 -m %d '%s'\n"
-                % (word_bytes, mode, digest.encode("utf-8")))
+    if JSON_LINES:
+      emit_vector(mode, word_bytes, digest, IS_OPTIMIZED)
+    else:
+      sys.stdout.buffer.write(b"echo %-31s | ./hashcat ${OPTS} -a 0 -m %d '%s'\n"
+                  % (word_bytes, mode, digest.encode("utf-8")))
 
 
 def passthrough(mod, iterations, with_plain):
@@ -783,8 +794,19 @@ def verify(mod, hashes_file, cracks_file, out_file):
       out.write(raw + b"\n")
 
 
+def encode_bytes(value):
+  return base64.b64encode(value).decode("ascii")
+
+
+def emit_vector(mode, password, digest, optimized, **extra):
+  record = {"version": 1, "mode": mode, "password_b64": encode_bytes(password),
+            "hash_b64": encode_bytes(digest.encode("utf-8")), "optimized": optimized}
+  record.update(extra)
+  sys.stdout.write(json.dumps(record, sort_keys=True) + "\n")
+
+
 def main():
-  argv = sys.argv[1:]
+  argv = [arg for arg in sys.argv[1:] if arg != "--json-lines"]
 
   if len(argv) < 2:
     usage_exit()
@@ -854,4 +876,5 @@ def main():
           kind == "potthrough")
 
 
-main()
+if __name__ == "__main__":
+  main()

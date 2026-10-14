@@ -24,7 +24,7 @@ import base64
 import hashlib
 import importlib.util
 import os
-import re
+import json
 import struct
 import subprocess
 import sys
@@ -113,17 +113,12 @@ def extract_esalts(esalts_buf):
   return esalts
 
 
-# The oracle's test vectors, as test.py reads them: echo <word> | ./hashcat ${OPTS} -a 0 -m N '<h>'.
-
-LINE = re.compile(rb"^echo (.*) \| \./hashcat \$\{OPTS\} -a 0 -m \d+ '(.*)'$")
-
-
-def vectors(mode, pure, hash_path, word_path):
+def vectors(mode, pure, hash_path, word_path, json_summary=False):
   family = "p" if pure else "o"
 
   env = dict(os.environ, IS_OPTIMIZED="0" if pure else "1")
 
-  proc = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "test_module_runner.py"), "single", str(mode)],
+  proc = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "test_module_runner.py"), "single", str(mode), "--json-lines"],
                         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
   if proc.returncode != 0:
@@ -133,12 +128,8 @@ def vectors(mode, pure, hash_path, word_path):
 
   with open(hash_path, "wb") as hf, open(word_path, "wb") as wf:
     for raw in proc.stdout.splitlines():
-      m = LINE.match(raw)
-
-      if m is None:
-        continue
-
-      line = bridge_line(mode, family, m.group(2))
+      row = json.loads(raw)
+      line = bridge_line(mode, family, base64.b64decode(row["hash_b64"], validate=True))
 
       if line is None:
         skipped += 1
@@ -146,21 +137,24 @@ def vectors(mode, pure, hash_path, word_path):
         continue
 
       hf.write(line + b"\n")
-      wf.write(m.group(1).rstrip(b" ") + b"\n")
+      wf.write(base64.b64decode(row["password_b64"], validate=True) + b"\n")
 
       written += 1
 
   sys.stderr.write("%d vector(s) written, %d too long for the bridge's 1024 byte salt\n" % (written, skipped))
+  if json_summary:
+    print(json.dumps({"version": 1, "mode": mode, "written": written, "too_long": skipped}))
 
 
 if __name__ == "__main__":
   args = sys.argv[1:]
 
   pure = "-P" in args
+  json_summary = "--json-summary" in args
 
-  args = [a for a in args if a != "-P"]
+  args = [a for a in args if a not in ("-P", "--json-summary")]
 
   if len(args) != 4 or args[0] != "vectors" or not args[1].isdigit():
-    sys.exit("usage: %s vectors <mode> <hashfile> <wordfile> [-P]" % sys.argv[0])
+    sys.exit("usage: %s vectors <mode> <hashfile> <wordfile> [-P] [--json-summary]" % sys.argv[0])
 
-  vectors(int(args[1]), pure, args[2], args[3])
+  vectors(int(args[1]), pure, args[2], args[3], json_summary)
