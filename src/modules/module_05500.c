@@ -285,6 +285,8 @@ int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
 
   /* precompute netntlmv1 exploit start */
 
+  bool ct3_found = false;
+
   for (u32 i = 0; i < 0x10000; i++)
   {
     u32 key_md4[2] = { 0 };
@@ -310,8 +312,14 @@ int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
 
     salt->salt_len = 24;
 
+    ct3_found = true;
+
     break;
   }
+
+  // no two byte key maps the challenge to ct3, so salt_buf[2] cannot be built
+
+  if (ct3_found == false) return (PARSER_SALT_VALUE);
 
   salt->salt_buf_pc[0] = digest_tmp[0];
   salt->salt_buf_pc[1] = digest_tmp[1];
@@ -484,6 +492,7 @@ void module_init (module_ctx_t *module_ctx)
   module_ctx->module_pwdump_column            = MODULE_DEFAULT;
   module_ctx->module_pw_max                   = MODULE_DEFAULT;
   module_ctx->module_pw_min                   = MODULE_DEFAULT;
+  module_ctx->module_register_options         = MODULE_DEFAULT;
   module_ctx->module_salt_max                 = MODULE_DEFAULT;
   module_ctx->module_salt_min                 = MODULE_DEFAULT;
   module_ctx->module_salt_type                = module_salt_type;

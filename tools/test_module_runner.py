@@ -21,6 +21,12 @@ import random
 import re
 import sys
 
+# Checked before any test module is imported, since an older python fails inside one with an error
+# that does not name the interpreter.
+
+if sys.version_info < (3, 10):
+  sys.exit("tools/test_module_runner.py needs Python 3.10 or newer, and this is %d.%d.%d" % sys.version_info[:3])
+
 TDIR = os.path.dirname(os.path.abspath(__file__))
 
 sys.path.insert(0, os.path.join(TDIR, "test_modules"))
@@ -815,6 +821,20 @@ def main():
   for hook in ("module_constraints", "module_generate_hash", "module_verify_hash"):
     if not hasattr(mod, hook):
       sys.exit("Module function '%s' not found\n" % hook)
+
+  # A run by hand names no kernel family, so a mode that has only pure kernels uses them, the way
+  # test_module_runner.pl did. The test suites always set IS_OPTIMIZED and keep the exit 2 Skip.
+  # The module is loaded again because a module can read IS_OPTIMIZED when it is imported.
+
+  if (kind != "edge") and ("IS_OPTIMIZED" in os.environ) == False:
+    pairs = mod.module_constraints()
+
+    if (pairs[2][0] == -1) and (pairs[2][1] == -1) and (pairs[0][0] != -1):
+      os.environ["IS_OPTIMIZED"] = "0"
+
+      IS_OPTIMIZED = False
+
+      mod = importlib.reload(mod)
 
   global NON_ASCII_OK
 

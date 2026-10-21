@@ -92,6 +92,12 @@ char *module_jit_build_options (MAYBE_UNUSED const hashconfig_t *hashconfig, MAY
     hc_asprintf (&jit_build_options, "-D _unroll");
   }
 
+  // NVIDIA GPU
+  if (device_param->opencl_device_vendor_id == VENDOR_ID_NV)
+  {
+    hc_asprintf (&jit_build_options, "-D _unroll");
+  }
+
   return jit_build_options;
 }
 
@@ -320,6 +326,7 @@ void module_init (module_ctx_t *module_ctx)
   module_ctx->module_pwdump_column            = MODULE_DEFAULT;
   module_ctx->module_pw_max                   = module_pw_max;
   module_ctx->module_pw_min                   = module_pw_min;
+  module_ctx->module_register_options         = MODULE_DEFAULT;
   module_ctx->module_salt_max                 = module_salt_max;
   module_ctx->module_salt_min                 = module_salt_min;
   module_ctx->module_salt_type                = module_salt_type;

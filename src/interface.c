@@ -14,8 +14,8 @@
 #include "dynloader.h"
 #include "interface.h"
 #include "hlfmt.h"
-#include "keyboard_layout.h"
 #include "recipe.h"
+#include "module_options.h"
 
 // The name that says which plugin interface this core implements is defined in src/plugin_abi.c. It
 // is the first thing a plugin has to get past, and the checks below are what catch a plugin that
@@ -35,6 +35,117 @@ int module_filename (const folder_config_t *folder_config, const int hash_mode, 
   #endif
 }
 
+// Hash-modes defined only by a stored recipe are numbered in the range reserved for them, see
+// docs/hashcat-hash-recipe.md. Each pair maps the number such a hash-mode had outside that range to
+// its number inside it, so that -m still accepts the old number. module_load () opens the module of
+// the new number, and user_options->hash_mode keeps the number that was given, which is the number a
+// run reports. The listings skip every old number, even where an earlier build or install left a
+// module file under it. A number in this table can never get a module of its own, because
+// module_load () would not open it.
+
+typedef struct module_alias
+{
+  u32 hash_mode_old;
+  u32 hash_mode_new;
+
+} module_alias_t;
+
+static const module_alias_t MODULE_ALIASES[] =
+{
+  {  1310, 40009 },
+  {  1320, 40010 },
+  {  5200, 40011 },
+  {  5720, 40012 },
+  {  6050, 40013 },
+  {  6060, 40014 },
+  {  6400, 40015 },
+  {  6500, 40016 },
+  {  6700, 40017 },
+  {  7100, 40018 },
+  {  7200, 40019 },
+  {  7900, 40020 },
+  {  9200, 40021 },
+  { 10000, 40022 },
+  { 10300, 40023 },
+  { 10900, 40024 },
+  { 10901, 40025 },
+  { 11000, 40026 },
+  { 11750, 40027 },
+  { 11760, 40028 },
+  { 11850, 40029 },
+  { 11860, 40030 },
+  { 11900, 40031 },
+  { 12000, 40032 },
+  { 12001, 40033 },
+  { 12100, 40034 },
+  { 12150, 40035 },
+  { 12300, 40036 },
+  { 12800, 40037 },
+  { 15100, 40038 },
+  { 18500, 40039 },
+  { 18800, 40040 },
+  { 19210, 40041 },
+  { 20200, 40042 },
+  { 20300, 40043 },
+  { 20400, 40044 },
+  { 20600, 40045 },
+  { 20720, 40046 },
+  { 20730, 40047 },
+  { 21300, 40048 },
+  { 21420, 40049 },
+  { 21600, 40050 },
+  { 22800, 40051 },
+  { 23200, 40052 },
+  { 24200, 40053 },
+  { 26300, 40054 },
+  { 28600, 40055 },
+  { 29100, 40056 },
+  { 32000, 40057 },
+  { 32010, 40058 },
+  { 32020, 40059 },
+  { 32030, 40060 },
+  { 32031, 40061 },
+  { 32040, 40062 },
+  { 32041, 40063 },
+  { 32050, 40064 },
+  { 32060, 40065 },
+  { 32070, 40066 },
+  { 32410, 40067 },
+  { 32420, 40068 },
+  { 32600, 40069 },
+  { 32900, 40070 },
+  { 33100, 40071 },
+  { 33300, 40072 },
+  { 33650, 40073 },
+  { 33660, 40074 },
+  { 33900, 40075 },
+  { 34400, 40076 },
+  { 34500, 40077 },
+  { 35000, 40078 },
+  { 35700, 40079 },
+  { 36500, 40080 },
+  { 37300, 40081 },
+  { 37301, 40082 },
+};
+
+u32 module_hash_mode_resolve (const u32 hash_mode)
+{
+  const u32 aliases_cnt = sizeof (MODULE_ALIASES) / sizeof (MODULE_ALIASES[0]);
+
+  u32 hash_mode_resolved = hash_mode;
+
+  for (u32 i = 0; i < aliases_cnt; i++)
+  {
+    if (MODULE_ALIASES[i].hash_mode_old != hash_mode) continue;
+
+    hash_mode_resolved = MODULE_ALIASES[i].hash_mode_new;
+
+    break;
+  }
+
+  return hash_mode_resolved;
+}
+
 bool module_load (hashcat_ctx_t *hashcat_ctx, module_ctx_t *module_ctx, const u32 hash_mode)
 {
   const folder_config_t *folder_config = hashcat_ctx->folder_config;
@@ -43,7 +154,7 @@ bool module_load (hashcat_ctx_t *hashcat_ctx, module_ctx_t *module_ctx, const u3
 
   char *module_file = (char *) hcmalloc (HCBUFSIZ_TINY);
 
-  module_filename (folder_config, hash_mode, module_file, HCBUFSIZ_TINY);
+  module_filename (folder_config, module_hash_mode_resolve (hash_mode), module_file, HCBUFSIZ_TINY);
 
   struct stat s;
 
@@ -150,16 +261,18 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
   module_ctx->module_usage_notice = MODULE_DEFAULT; // set all module to have usage_notice by empty default; such that this property doesn't have to be declared explicitly by all modules (such that we don't break private plugins without this options)
   module_ctx->module_advice_notice = MODULE_DEFAULT; // set all module to have advice_notice empty by default; such that this property doesn't have to be declared explicitly by all modules (such that we don't break private plugins without this options)
   module_ctx->module_length_sort = MODULE_DEFAULT; // same for length_sort, so a mode that does not want the length sort does not have to say so
+  module_ctx->module_benchmark_cost = MODULE_DEFAULT; // same for benchmark_cost, so a mode without extra benchmark cost parameters to show does not have to say so
   module_ctx->module_init (module_ctx);
 
-  // The three optional fields are the only ones not covered by CHECK_DEFINED below, so a module that
+  // The four optional fields are the only ones not covered by CHECK_DEFINED below, so a module that
   // assigns NULL to one of them instead of leaving it alone gets past every guard: the readers test
   // against MODULE_DEFAULT, not against NULL, and then call it. Seeding them before module_init ()
   // only covers the module that says nothing. This covers the one that says NULL.
 
-  if (module_ctx->module_usage_notice  == NULL) module_ctx->module_usage_notice  = MODULE_DEFAULT;
-  if (module_ctx->module_advice_notice == NULL) module_ctx->module_advice_notice = MODULE_DEFAULT;
-  if (module_ctx->module_length_sort   == NULL) module_ctx->module_length_sort   = MODULE_DEFAULT;
+  if (module_ctx->module_usage_notice   == NULL) module_ctx->module_usage_notice   = MODULE_DEFAULT;
+  if (module_ctx->module_advice_notice  == NULL) module_ctx->module_advice_notice  = MODULE_DEFAULT;
+  if (module_ctx->module_length_sort    == NULL) module_ctx->module_length_sort    = MODULE_DEFAULT;
+  if (module_ctx->module_benchmark_cost == NULL) module_ctx->module_benchmark_cost = MODULE_DEFAULT;
 
   // What a hash tells us about whoever chose the password. A module that says nothing gets the answer
   // that works for every mode, which is the account name in front of the hash cut into words, and a
@@ -201,6 +314,7 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
   CHECK_DEFINED (module_ctx, module_benchmark_mask);
   CHECK_DEFINED (module_ctx, module_benchmark_charset);
   CHECK_DEFINED (module_ctx, module_benchmark_salt);
+  // CHECK_DEFINED (module_ctx, module_benchmark_cost); // we don't check this here as it's an optional field
   CHECK_DEFINED (module_ctx, module_bridge_name);
   CHECK_DEFINED (module_ctx, module_bridge_type);
   CHECK_DEFINED (module_ctx, module_build_plain_postprocess);
@@ -266,6 +380,7 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
   CHECK_DEFINED (module_ctx, module_pw_max);
   CHECK_DEFINED (module_ctx, module_pw_min);
   CHECK_DEFINED (module_ctx, module_pwdump_column);
+  CHECK_DEFINED (module_ctx, module_register_options);
   CHECK_DEFINED (module_ctx, module_salt_max);
   CHECK_DEFINED (module_ctx, module_salt_min);
   CHECK_DEFINED (module_ctx, module_salt_type);
@@ -317,6 +432,15 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
   hashconfig->opti_type     = module_ctx->module_opti_type      (hashconfig, user_options, user_options_extra);
   hashconfig->opts_type     = module_ctx->module_opts_type      (hashconfig, user_options, user_options_extra);
 
+  // Mode 4000 uses the recipe to parse its hash lines and determine the encoding of the hash.
+
+  hashconfig->hash_recipe_option = user_options->hash_recipe;
+
+  // A recipe replaces only the pure kernels and -O still runs the module's optimized ones, so the
+  // probes for those below use the kern_type the module declares.
+
+  const u32 optimized_kern_type = hashconfig->kern_type;
+
   // A mode whose module names a recipe runs mode 4000's pure kernels, built from that recipe. Option
   // -O selects the mode's optimized kernels when available. Otherwise, the fallback below uses the
   // recipe kernels. These read candidates as little endian words, so a mode that generates them big
@@ -349,11 +473,34 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
         return -1;
       }
 
+      // A recipe with pbkdf2 or a loop runs in mode 4000's slow kernel and can replace only a slow
+      // mode's kernels. A fast recipe can replace only a fast mode's kernels. For pbkdf2, each work
+      // item in the loop kernel processes VECT_SIZE candidates. For a for loop, it processes one
+      // candidate per work item.
+
+      const bool mode_slow = (hashconfig->attack_exec == ATTACK_EXEC_OUTSIDE_KERNEL);
+
+      if (mode_slow != (prog.slow == 1))
+      {
+        event_log_error (hashcat_ctx, "Recipe of hash-mode %d is a %s hash, but the mode is a %s one", hashconfig->hash_mode, (prog.slow == 1) ? "slow" : "fast", (mode_slow == true) ? "slow" : "fast");
+
+        return -1;
+      }
+
       hashconfig->hash_recipe = recipe;
       hashconfig->kern_type   = RECIPE_KERN_TYPE;
 
       hashconfig->opts_type &= ~OPTS_TYPE_PT_GENERATE_BE;
       hashconfig->opts_type |=  OPTS_TYPE_PT_GENERATE_LE;
+
+      if (prog.kdf_blocks > 0)
+      {
+        hashconfig->opti_type |= OPTI_TYPE_SLOW_HASH_SIMD_LOOP;
+      }
+      else if (prog.slow == 1)
+      {
+        hashconfig->opti_type &= ~OPTI_TYPE_SLOW_HASH_SIMD_LOOP;
+      }
     }
   }
 
@@ -380,57 +527,11 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
 
   #undef CHECK_MANDATORY
 
-  if (user_options->keyboard_layout_mapping)
-  {
-    if ((hashconfig->opts_type & OPTS_TYPE_KEYBOARD_MAPPING) == 0)
-    {
-      if (user_options->autodetect == false) event_log_error (hashcat_ctx, "Parameter --keyboard-layout-mapping not valid for hash-type %u", hashconfig->hash_mode);
+  // Whether this mode takes a module option at all is decided by the option table, see
+  // option_table_check_module (). The checks a module attaches to a value, such as a file it cannot
+  // read, run here, because this is the first point with the module loaded.
 
-      return -1;
-    }
-
-    // The file is read here as well as in the module that uses it, because this is the only place
-    // with somewhere to report it. A module loads the mapping into its own esalt from a hook whose
-    // result nothing looks at, so a file it could not use converted nothing and said nothing, which
-    // is the failure this check exists to prevent. Reading it twice costs one pass over a file of at
-    // most 256 lines, once per run.
-
-    keyboard_layout_mapping_t probe[256];
-
-    int probe_cnt = 0;
-
-    if (hc_path_read (user_options->keyboard_layout_mapping) == false)
-    {
-      if (user_options->autodetect == false) event_log_error (hashcat_ctx, "%s: %s", user_options->keyboard_layout_mapping, strerror (errno));
-
-      return -1;
-    }
-
-    if (initialize_keyboard_layout_mapping (user_options->keyboard_layout_mapping, probe, &probe_cnt) == false)
-    {
-      if (user_options->autodetect == false) event_log_error (hashcat_ctx, "%s: no keyboard mappings in this file. A mapping is one source and one replacement separated by a single tab.", user_options->keyboard_layout_mapping);
-
-      return -1;
-    }
-
-    // A mapping converts each token to one other token, so a file that gives a token two replacements
-    // is not one. The table attack takes such a file and offers both, and the reverse layout tables
-    // are exactly that where two keys of one layout produce the same character on the other. Here the
-    // lookup would find whichever came first and convert the other away silently.
-
-    for (int i = 0; i < probe_cnt; i++)
-    {
-      for (int j = i + 1; j < probe_cnt; j++)
-      {
-        if (probe[i].src_len != probe[j].src_len) continue;
-        if (probe[i].src_char != probe[j].src_char) continue;
-
-        if (user_options->autodetect == false) event_log_error (hashcat_ctx, "%s: one source is given two replacements, so this is a table rather than a keyboard mapping. A mapping converts each token to exactly one other token.", user_options->keyboard_layout_mapping);
-
-        return -1;
-      }
-    }
-  }
+  if (module_options_check (hashcat_ctx) == -1) return -1;
 
   if (user_options->multiply_accel == false)
   {
@@ -452,19 +553,7 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
     hashconfig->opts_type |= OPTS_TYPE_PT_HEX;
   }
 
-  if (user_options->hex_salt)
-  {
-    if (hashconfig->salt_type == SALT_TYPE_GENERIC)
-    {
-      hashconfig->opts_type |= OPTS_TYPE_ST_HEX;
-    }
-    else
-    {
-      if (user_options->autodetect == false) event_log_error (hashcat_ctx, "Parameter --hex-salt not valid for hash-type %u", hashconfig->hash_mode);
-
-      return -1;
-    }
-  }
+  if ((user_options->hex_salt == true) && (hashconfig->salt_type == SALT_TYPE_GENERIC)) hashconfig->opts_type |= OPTS_TYPE_ST_HEX;
 
   if (user_options->keep_guessing)
   {
@@ -504,7 +593,7 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
 
   hashconfig->has_pure_kernel = hc_path_read (source_file);
 
-  generate_source_kernel_filename (user_options->slow_candidates, hashconfig->attack_exec, user_options_extra->attack_kern, hashconfig->kern_type, true, folder_config->shared_dir, source_file);
+  generate_source_kernel_filename (user_options->slow_candidates, hashconfig->attack_exec, user_options_extra->attack_kern, optimized_kern_type, true, folder_config->shared_dir, source_file);
 
   hashconfig->has_optimized_kernel = hc_path_read (source_file);
 
@@ -568,7 +657,7 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
   // In hash-info mode there is no attack to run, so what a reader is asking is which kernel types the
   // mode has at all rather than which it has for the attack-mode that happens to be the default. The
   // probe above uses the selected attack_kern, so a mode whose only kernel serves one attack-mode
-  // reports no kernel type, and tools/test_edge.sh reads that line and concludes there is nothing to
+  // reports no kernel type, and test.py --edge reads that line and concludes there is nothing to
   // test. -m 37000 is the first mode of that shape, a 4 byte key recovery that only brute-force drives.
   //
   // This sits after opti_type and opts_type have had their say above, so it changes what is reported
@@ -581,13 +670,17 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
 
     const u32 attack_kerns_cnt = sizeof (attack_kerns) / sizeof (attack_kerns[0]);
 
+    // a recipe mode's pure kernels are the recipe ones, also when -O left the module's kern_type
+
+    const u32 pure_kern_type = (module_ctx->module_hash_recipe != MODULE_DEFAULT) ? RECIPE_KERN_TYPE : hashconfig->kern_type;
+
     for (u32 i = 0; i < attack_kerns_cnt; i++)
     {
-      generate_source_kernel_filename (user_options->slow_candidates, hashconfig->attack_exec, attack_kerns[i], hashconfig->kern_type, false, folder_config->shared_dir, source_file);
+      generate_source_kernel_filename (user_options->slow_candidates, hashconfig->attack_exec, attack_kerns[i], pure_kern_type, false, folder_config->shared_dir, source_file);
 
       if (hc_path_read (source_file) == true) hashconfig->has_pure_kernel = true;
 
-      generate_source_kernel_filename (user_options->slow_candidates, hashconfig->attack_exec, attack_kerns[i], hashconfig->kern_type, true, folder_config->shared_dir, source_file);
+      generate_source_kernel_filename (user_options->slow_candidates, hashconfig->attack_exec, attack_kerns[i], optimized_kern_type, true, folder_config->shared_dir, source_file);
 
       if (hc_path_read (source_file) == true) hashconfig->has_optimized_kernel = true;
     }
@@ -619,6 +712,17 @@ int hashconfig_init (hashcat_ctx_t *hashcat_ctx)
   if (module_ctx->module_separator                != MODULE_DEFAULT) hashconfig->separator               = module_ctx->module_separator                (hashconfig, user_options, user_options_extra);
   if (module_ctx->module_tmp_size                 != MODULE_DEFAULT) hashconfig->tmp_size                = module_ctx->module_tmp_size                 (hashconfig, user_options, user_options_extra);
   if (module_ctx->module_warmup_disable           != MODULE_DEFAULT) hashconfig->warmup_disable          = module_ctx->module_warmup_disable           (hashconfig, user_options, user_options_extra);
+
+  // A stored recipe running as a slow hash keeps its pbkdf2 state or carried variables in
+  // the tmps. Their layout must match mode 4000's slow kernel, rather than the layout used
+  // by the mode's own kernels.
+
+  if (hashconfig->hash_recipe != NULL)
+  {
+    recipe_prog_t prog;
+
+    if ((recipe_compile (&prog, hashconfig->hash_recipe) == true) && (prog.slow == 1)) hashconfig->tmp_size = recipe_tmp_size (&prog);
+  }
 
   // those depend on some previously defined values
 

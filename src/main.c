@@ -11,6 +11,7 @@
 
 #include "types.h"
 #include "user_options.h"
+#include "module_options.h"
 #include "usage.h"
 #include "memory.h"
 #include "hashcat.h"
@@ -341,6 +342,11 @@ static void main_outerloop_starting (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MA
   if (user_options->speed_only   == true) return;
   if (user_options->identify     == true) return;
 
+  // Key presses come from a terminal. Anything else on stdin is data the attack does not read, and a
+  // 'c' or a 'q' in a redirected wordlist would stop the run.
+
+  if (is_stdin_terminal () == false) return;
+
   if ((user_options_extra->wordlist_mode == WL_MODE_MASK) || (user_options_extra->wordlist_mode == WL_MODE_GENERIC))
   {
     // see thread_keypress() how to access status information
@@ -540,7 +546,14 @@ static void main_calculated_words_base (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx,
 
   if (user_options->lookup != NULL) return;
 
-  event_log_info (hashcat_ctx, "%" PRIu64 "", status_ctx->words_base);
+  if (user_options->json == true)
+  {
+    event_log_info (hashcat_ctx, "{ \"keyspace\": %" PRIu64 " }", status_ctx->words_base);
+  }
+  else
+  {
+    event_log_info (hashcat_ctx, "%" PRIu64 "", status_ctx->words_base);
+  }
 }
 
 static void main_calculated_words_cnt (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE_UNUSED const void *buf, MAYBE_UNUSED const size_t len)
@@ -551,7 +564,14 @@ static void main_calculated_words_cnt (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, 
   if (user_options->keyspace == false) return;
   if (user_options->total_candidates == false) return;
 
-  event_log_info (hashcat_ctx, "%" PRIu64 "", status_ctx->words_cnt);
+  if (user_options->json == true)
+  {
+    event_log_info (hashcat_ctx, "{ \"total_candidates\": %" PRIu64 " }", status_ctx->words_cnt);
+  }
+  else
+  {
+    event_log_info (hashcat_ctx, "%" PRIu64 "", status_ctx->words_cnt);
+  }
 }
 
 static void main_potfile_remove_parse_pre (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE_UNUSED const void *buf, MAYBE_UNUSED const size_t len)
@@ -656,6 +676,7 @@ static void main_outerloop_mainscreen (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, 
   const hashconfig_t   *hashconfig   = hashcat_ctx->hashconfig;
   const hashes_t       *hashes       = hashcat_ctx->hashes;
   const hwmon_ctx_t    *hwmon_ctx    = hashcat_ctx->hwmon_ctx;
+  const module_ctx_t   *module_ctx   = hashcat_ctx->module_ctx;
   const straight_ctx_t *straight_ctx = hashcat_ctx->straight_ctx;
   const user_options_t *user_options = hashcat_ctx->user_options;
 
@@ -667,7 +688,7 @@ static void main_outerloop_mainscreen (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, 
 
   if (user_options->benchmark == true)
   {
-    if (user_options->machine_readable == false)
+    if ((user_options->machine_readable == false) && (user_options->benchmark_json == false))
     {
       char buf[HCBUFSIZ_TINY] = { 0 };
 
@@ -680,7 +701,18 @@ static void main_outerloop_mainscreen (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, 
 
       size_t len = 0;
 
-      if ((hashconfig->attack_exec == ATTACK_EXEC_OUTSIDE_KERNEL) && (hashconfig->is_salted == true))
+      if (module_ctx->module_benchmark_cost != MODULE_DEFAULT)
+      {
+        // A mode whose cost is not one iteration count, such as argon2 with its m, t and p, spells
+        // out its own parameters here in place of the Iterations readout.
+
+        char cost[HCBUFSIZ_TINY] = { 0 };
+
+        module_ctx->module_benchmark_cost (hashconfig, &hashes[0].salts_buf[0], hashes[0].esalts_buf, cost, sizeof (cost));
+
+        len = snprintf (buf, sizeof (buf), "* Hash-Mode %d (%s) [%s] [Kernel: %s]", hashconfig->hash_mode, hashconfig->hash_name, cost, kernel_name);
+      }
+      else if ((hashconfig->attack_exec == ATTACK_EXEC_OUTSIDE_KERNEL) && (hashconfig->is_salted == true))
       {
         len = snprintf (buf, sizeof (buf), "* Hash-Mode %d (%s) [Iterations: %d] [Kernel: %s]", hashconfig->hash_mode, hashconfig->hash_name, hashes[0].salts_buf[0].salt_iter, kernel_name);
       }
@@ -1064,6 +1096,15 @@ static void main_monitor_noinput_hint (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, 
 static void main_monitor_noinput_abort (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE_UNUSED const void *buf, MAYBE_UNUSED const size_t len)
 {
   event_log_error (hashcat_ctx, "No password candidates received in stdin mode, aborting");
+}
+
+static void main_monitor_stdin_overrun (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE_UNUSED const void *buf, MAYBE_UNUSED const size_t len)
+{
+  const user_options_t *user_options = hashcat_ctx->user_options;
+
+  if (user_options->quiet == true) return;
+
+  event_log_warning (hashcat_ctx, "Input on stdin exceeded --stdin-count. Progress and time estimate are no longer shown.");
 }
 
 // The candidate generator, not the unit. Worth its own message because the device number in the
@@ -1725,9 +1766,8 @@ static bool main_timing_report_enabled (const user_options_t *user_options)
   if (user_options->task_time_breakdown == false) return false;
 
   // anything that produces machine readable output, or that is not a run at all, keeps the output it
-  // has today
+  // has today. --quiet silences the human text, and the breakdown is what was asked for.
 
-  if (user_options->quiet            == true) return false;
   if (user_options->machine_readable == true) return false;
   if (user_options->keyspace         == true) return false;
   if (user_options->stdout_flag      == true) return false;
@@ -1934,6 +1974,7 @@ static void event (const u32 id, hashcat_ctx_t *hashcat_ctx, const void *buf, co
     case EVENT_MONITOR_PERFORMANCE_HINT:  main_monitor_performance_hint  (hashcat_ctx, buf, len); break;
     case EVENT_MONITOR_NOINPUT_HINT:      main_monitor_noinput_hint      (hashcat_ctx, buf, len); break;
     case EVENT_MONITOR_NOINPUT_ABORT:     main_monitor_noinput_abort     (hashcat_ctx, buf, len); break;
+    case EVENT_MONITOR_STDIN_OVERRUN:     main_monitor_stdin_overrun     (hashcat_ctx, buf, len); break;
     case EVENT_BACKEND_SESSION_POST:      main_backend_session_post      (hashcat_ctx, buf, len); break;
     case EVENT_BACKEND_SESSION_PRE:       main_backend_session_pre       (hashcat_ctx, buf, len); break;
     case EVENT_BACKEND_SESSION_HOSTMEM:   main_backend_session_hostmem   (hashcat_ctx, buf, len); break;
@@ -2005,6 +2046,22 @@ int main (int argc, char **argv)
     return -1;
   }
 
+  // the options the modules add are collected first, so that the command line below can use them. The
+  // two options that control how they are collected are read ahead of the parse.
+
+  user_options_prescan (hashcat_ctx, argc, argv);
+
+  if (module_options_init (hashcat_ctx, install_folder, shared_folder, VERSION_TAG, COMPTIME) == -1)
+  {
+    user_options_destroy (hashcat_ctx);
+
+    hashcat_destroy (hashcat_ctx);
+
+    hcfree (hashcat_ctx);
+
+    return -1;
+  }
+
   // parse commandline parameters and check them
 
   if (user_options_getopt (hashcat_ctx, argc, argv) == -1)
@@ -2064,6 +2121,21 @@ int main (int argc, char **argv)
     hcfree (hashcat_ctx);
 
     return 0;
+  }
+
+  // module_options_init () has collected the options from every module and written the cache already
+
+  if (user_options->module_cache_rebuild == true)
+  {
+    const int rc = module_options_cache_report (hashcat_ctx);
+
+    user_options_destroy (hashcat_ctx);
+
+    hashcat_destroy (hashcat_ctx);
+
+    hcfree (hashcat_ctx);
+
+    return rc;
   }
 
   // the report is decided before the session runs, because a session that fails still ends here

@@ -15,7 +15,10 @@ import ast
 import atexit
 import base64
 import contextlib
-import fcntl
+try:
+  import fcntl
+except ImportError:
+  fcntl = None
 import glob
 import importlib.util
 import json
@@ -32,10 +35,38 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+# On Windows hashcat writes CRLF to a text mode stdout, and every parser below matches LF terminated
+# lines, so CRLF is folded to LF in whatever a run captures.
+if os.name == "nt":
+  _subprocess_run = subprocess.run
+
+  def _run_lf(*a, **kw):
+    proc = _subprocess_run(*a, **kw)
+
+    for name in ("stdout", "stderr"):
+      v = getattr(proc, name, None)
+
+      if isinstance(v, bytes):
+        setattr(proc, name, v.replace(b"\r\n", b"\n"))
+      elif isinstance(v, str):
+        setattr(proc, name, v.replace("\r\n", "\n"))
+
+    # A negative exit code arrives as its unsigned 32 bit value, -10 as 4294967286, where every
+    # check below expects the POSIX byte, 246. A crash is an NTSTATUS such as 0xC00000FD, and its
+    # low byte would read as a memory skip, so only the small negative codes are folded.
+    rc = getattr(proc, "returncode", None)
+
+    if isinstance(rc, int) and (rc >= 0xFFFFFF00):
+      proc.returncode = rc & 0xff
+
+    return proc
+
+  subprocess.run = _run_lf
+
 TDIR   = os.path.dirname(os.path.abspath(__file__))
 ROOT   = os.path.dirname(TDIR)
 RUNNER = os.path.join(TDIR, "test_module_runner.py")
-BIN    = os.path.join(ROOT, "hashcat")
+BIN    = os.path.join(ROOT, "hashcat.exe" if os.name == "nt" else "hashcat")
 
 # Per-process isolation of hashcat's mutable per-run state, so any number of test.py processes (and
 # -j workers) run without stepping on each other. Every hashcat call gets these:
@@ -65,6 +96,10 @@ def setup_isolation():
 # process running its modes in sequence, so the last run is the one classify() is scoring.
 LAST_CMD = None
 
+# The stdin bytes of that same run, set alongside LAST_CMD. The -a 0 runs feed their candidate words
+# on stdin rather than as a wordlist file, so this is the only copy of them to save on a failure.
+LAST_STDIN = None
+
 # test.sh kept a test_<ts>/ folder per run. OUTDIR is its path or None, LOGFULL the open logfull.txt
 # handle. OWN_OUTDIR is True only in the process that made the folder, so a -j child does not
 # regenerate the parent's derived files. PROGRESS is the running tally the interrupt handler prints.
@@ -93,13 +128,15 @@ MEMSKIP_RC = 90
 
 AUTO_LOGDIR = "\0auto"     # --logdir with no argument: pick test_<ts>/
 
-# test.sh's status() reason strings, keyed by hashcat's exit code. The 246,248-253 and 30 codes are
-# runtime skips; 1 is a clean exhaust, 4 a timeout, 10 a crack whose plains were not in the output.
+# Reasons keyed by hashcat's exit code, as rc_final in hashcat.c sets it: -3 to -11 wrap to 253 to
+# 245. The 246-253 and 30 codes are runtime skips. 1 is a clean exhaust, 4 a timeout, 10 a crack
+# whose plains were not in the output, and 245, a failed self-test, is an error.
 REASON = {
+  245: "self-test failed",
   246: "autotune failure",
-  248: "skipped by runtime (mixed backend errors detected)",
-  249: "skipped by runtime (Invalid module_extra_buffer_size)",
-  250: "skipped by runtime (Too many compute units to keep minimum kernel accel limit)",
+  247: "skipped by runtime (mixed backend errors detected)",
+  248: "skipped by runtime (Invalid module_extra_buffer_size)",
+  250: "skipped by runtime (kernel create error)",
   251: "skipped by runtime (main kernel build error)",
   252: "skipped by runtime (memory hit limit)",
   253: "skipped by runtime (module_unstable_warning)",
@@ -159,17 +196,30 @@ def logfull_append(text):
   if not text.endswith("\n"):
     text += "\n"
 
+  # Windows has no fcntl, and a failed lock must not skip the write, so the lock is only taken where
+  # it exists.
+  locked = False
+
   try:
-    fcntl.flock(LOGFULL, fcntl.LOCK_EX)
+    if fcntl is None:
+      pass
+    else:
+      fcntl.flock(LOGFULL, fcntl.LOCK_EX)
+      locked = True
+  except Exception:
+    pass
+
+  try:
     LOGFULL.write(text)
     LOGFULL.flush()
   except Exception:
     pass
   finally:
-    try:
-      fcntl.flock(LOGFULL, fcntl.LOCK_UN)
-    except Exception:
-      pass
+    if locked == True:
+      try:
+        fcntl.flock(LOGFULL, fcntl.LOCK_UN)
+      except Exception:
+        pass
 
 
 def log_output(cmd, output):
@@ -179,13 +229,68 @@ def log_output(cmd, output):
   logfull_append("> cmdline : %s\n%s" % (_cmdline(cmd), text.rstrip("\n")))
 
 
+def preserve_inputs(cmd, stdin_bytes=None):
+  # A failing run's hash file and dicts live in the scratch dir, which is deleted when the run ends,
+  # so they are copied into the log folder CI uploads. The cmdline is logged next to this, so the
+  # files plus that line reproduce the run. Only the arguments that name a file the run generated are
+  # taken, which is the hash file and the dicts: an argument is kept when it is a file under the
+  # temp root the scratch dir lives in, which leaves out the hashcat binary, the mask and the flags.
+  # The -a 0 runs feed their candidate words to hashcat on stdin rather than as a wordlist file, so
+  # those bytes are saved as a "stdin" file beside the rest, which is the only copy of them there is.
+  # Each failure gets its own subdirectory, so a mode whose hash file is reused across runs keeps the
+  # copy from each one.
+  if OUTDIR is None:
+    return None
+
+  tmp_root = os.path.realpath(tempfile.gettempdir()) + os.sep
+
+  def is_scratch_file(a):
+    try:
+      return os.path.isfile(a) and os.path.realpath(a).startswith(tmp_root)
+    except (TypeError, ValueError):
+      return False
+
+  files = [a for a in cmd if is_scratch_file(a)]
+
+  if not files and not stdin_bytes:
+    return None
+
+  try:
+    base = os.path.join(OUTDIR, "failed")
+
+    os.makedirs(base, exist_ok=True)
+
+    dest = tempfile.mkdtemp(dir=base)
+
+    for f in files:
+      name = os.path.basename(f)
+
+      if isinstance(name, bytes):
+        name = name.decode("utf-8", "replace")
+
+      shutil.copy2(f, os.path.join(dest, name))
+
+    if stdin_bytes:
+      with open(os.path.join(dest, "stdin"), "wb") as fh:
+        fh.write(stdin_bytes)
+
+    return os.path.relpath(dest, OUTDIR)
+  except Exception:
+    return None
+
+
 def log_result(ret):
   # test.sh's status() added a one-line reason after the output for a non-OK result. Keep it, so the
-  # failures can be grepped out of logfull.txt into summary.txt.
+  # failures can be grepped out of logfull.txt into summary.txt. A failing run also has its input
+  # files copied into the log folder, so the run reproduces from the uploaded log alone.
   if ret == 0 or LAST_CMD is None:
     return
 
-  logfull_append("%s, cmdline : %s" % (reason_for(ret), _cmdline(LAST_CMD)))
+  saved = preserve_inputs(LAST_CMD, LAST_STDIN)
+
+  extra = (" (inputs: %s)" % saved) if saved else ""
+
+  logfull_append("%s, cmdline : %s%s" % (reason_for(ret), _cmdline(LAST_CMD), extra))
 
 
 def record(v):
@@ -482,7 +587,7 @@ MASK_ONLY_MODES = {37000}
 MFULC_MODES = {37000}
 
 # The LUKS modes whose hashes are container paths, not the generator's own output. whole_word_vectors
-# leaves their -a 4 list alone (test.sh); 10300 takes its hash from another field and is excluded
+# leaves their -a 4 list alone (test.sh); 40023 takes its hash from another field and is excluded
 # there too.
 
 LUKS_MODES = {29511, 29512, 29513, 29521, 29522, 29523, 29531, 29532, 29533, 29541, 29542, 29543,
@@ -932,12 +1037,12 @@ def a4_vectors(mode, pairs, optimized):
   # least one character, so the zero length word the -a 0 vectors carry for a min-zero mode cannot be
   # written into a ruleset. Where one is present it is swapped for a spare word of length 1 and the
   # hash that goes with it. Returns the substituted pairs, or None to fall back to the -a 0 vectors,
-  # which is what an empty _a4.sh means in test.sh (no empty word, a LUKS or 10300 list, or no spare).
+  # which is what an empty _a4.sh means in test.sh (no empty word, a LUKS or 40023 list, or no spare).
 
   if not pairs:
     return None
 
-  if mode in LUKS_MODES or mode == 10300:
+  if mode in LUKS_MODES or mode == 40023:
     return None
 
   if not any(word == b"" for word, _ in pairs):
@@ -1016,8 +1121,8 @@ def classify(rc, matched, c):
   # runtime-skip codes to skipped. The one deviation: test.sh sent every other
   # code, 255 (cuMemAlloc out of memory) and a signal crash included, to not found, so a worker that
   # never got its memory read the same as one that ran and missed the password. Those go to err
-  # instead, a hard error kept apart from a failed crack. The skip set is spelled out, not a range,
-  # because 247 is not a skip; it lands in err with the rest.
+  # instead, a hard error kept apart from a failed crack. The skip set is 246 to 253, 247 included:
+  # every device skipped, though not all for the same one of those reasons.
 
   c["cnt"] += 1
 
@@ -1034,7 +1139,7 @@ def classify(rc, matched, c):
     c["to"] += 1
   elif ret == 10:
     c["nm"] += 1
-  elif ret == 30 or ret in (246, 248, 249, 250, 251, 252, 253):
+  elif ret == 30 or 246 <= ret <= 253:
     c["rs"] += 1
 
     if ret == 252 and os.environ.get("HASHCAT_DEVICE_MEM_LIMIT"):
@@ -1065,10 +1170,11 @@ def verdict(c):
 
 
 def run_hashcat(opts, mode, target, stdin_bytes, attack=0, extra=()):
-  global LAST_CMD
+  global LAST_CMD, LAST_STDIN
 
   cmd = [BIN] + with_bridge_opts(opts, mode) + module_opts(mode) + ["-a", str(attack), "-m", str(mode), target] + list(extra)
   LAST_CMD = cmd
+  LAST_STDIN = stdin_bytes
 
   # Run from the repo root, the way test.sh does, so hashcat finds OpenCL/ and caches kernels/
   # there rather than in whatever directory the manager was invoked from.
@@ -1833,6 +1939,12 @@ def attack_3_single(r):
 
     # test.sh: PKZIP master key needs at least two '?d' groups to keep after the cut.
     if r.mode == 20510 and i <= 1:
+      i += 1
+
+      continue
+
+    # PKZIP master key: a word of 6 bytes or fewer leaves an empty mask past the cut.
+    if r.mode == 20510 and len(word) <= 6:
       i += 1
 
       continue
@@ -3076,8 +3188,7 @@ def container_report(args, mode, attack, width, label, e):
 
   v = selftest_verdict(e)
 
-  print("%s > %s : %d/1 not found, %d/1 not matched, %d/1 timeout, %d/1 skipped"
-        % (ctx, v, e["nf"], e["nm"], e["to"], e["rs"]))
+  print(selftest_line(ctx, v, e))
 
   note_verdict(v)
 
@@ -3093,6 +3204,8 @@ def container_crack(args, opts, mode, attack, hash_file, width, label, extra, cr
 
   rc, _ = run_hashcat(opts + ["--backend-vector-width", str(width)], crack_mode or mode, hash_file,
                       None, attack=attack, extra=list(extra))
+  log_result(rc)
+
   e = selftest_status(rc)
 
   container_report(args, mode, attack if report_attack is None else report_attack, width, label, e)
@@ -3576,24 +3689,21 @@ def archive_crack(args, mode, hash_file, label, tmp, fast):
 # ---- container generators (test.sh veracrypt_generate/truecrypt_generate/luks*_generate) ----
 
 def vc_encryption_name(cascade):
-  # test.sh spells a cascade "aes-twofish-serpent"; veracrypt wants "AES(Twofish(Serpent))".
+  # test.sh spells a cascade "aes-twofish-serpent"; the veracrypt console wants the parts dash
+  # separated, "AES-Twofish-Serpent". 1.26 rejects the older nested "AES(Twofish(Serpent))" form
+  # on "--create" with "Unknown option", so the dash form is the only one that builds a volume.
   names = {"aes": "AES", "serpent": "Serpent", "twofish": "Twofish",
            "camellia": "Camellia", "kuznyechik": "Kuznyechik"}
 
-  out   = ""
-  close = ""
+  parts = []
 
   for part in cascade.split("-"):
     if part not in names:
       return None
 
-    if not out:
-      out = names[part]
-    else:
-      out   = "%s(%s" % (out, names[part])
-      close += ")"
+    parts.append(names[part])
 
-  return out + close
+  return "-".join(parts)
 
 
 def veracrypt_generate(mode, vc_hash, cascade, out_file):
@@ -4417,14 +4527,15 @@ MINIMAL_MODES = [0, 100, 110, 400, 500, 2600, 3000, 3200, 6211, 11600, 12500, 13
 def selftest_status(rc):
   # test.sh status() as container_run_and_report calls it (test.sh): bucket the raw hashcat
   # exit code. Unlike the oracle attacks there is no cracked-but-not-matched rewrite, because the
-  # self-test path checks the exit code alone, not the output.
+  # self-test path checks the exit code alone, not the output. A code outside the known set, a crash
+  # or a failed self-test among them, is a hard error, as classify() counts it.
 
-  e = {"ce": 0, "rs": 0, "to": 0, "nf": 0, "nm": 0}
+  e = {"ce": 0, "rs": 0, "to": 0, "nf": 0, "nm": 0, "err": 0}
 
   if rc == 0:
     return e
 
-  if rc == 246 or rc == 30 or rc in (248, 249, 250, 251, 252, 253):
+  if rc == 30 or 246 <= rc <= 253:
     e["rs"] += 1
   elif rc == 1:
     e["nf"] += 1
@@ -4436,13 +4547,17 @@ def selftest_status(rc):
     e["ce"] += 1
     e["nm"] += 1
   else:
-    e["nf"] += 1
+    e["err"] += 1
 
   return e
 
 
 def selftest_verdict(e):
-  # test.sh container_run_and_report's message (test.sh), with cnt fixed at 1.
+  # test.sh container_run_and_report's message (test.sh), with cnt fixed at 1, and the hard error
+  # first, as verdict() puts it.
+
+  if e["err"]:
+    return "Fault"
 
   if e["ce"]:
     return "Compare Error"
@@ -4457,6 +4572,18 @@ def selftest_verdict(e):
     return "Warning"
 
   return "OK"
+
+
+def selftest_line(ctx, v, e):
+  # test.sh's one-run result line, plus the errors field report() adds when there is one.
+
+  line = ("%s > %s : %d/1 not found, %d/1 not matched, %d/1 timeout, %d/1 skipped"
+          % (ctx, v, e["nf"], e["nm"], e["to"], e["rs"]))
+
+  if e["err"]:
+    line += ", %d/1 errors" % e["err"]
+
+  return line
 
 
 def selftest_context(args, mode, attack, width_label):
@@ -4529,12 +4656,12 @@ def selftest_vector_test(args, opts, mode, attack, width_label, tmp):
 
   rc, _ = run_hashcat(opts, mode, hash_file, None, attack=attack, extra=extra)
 
+  log_result(rc)
+
   e   = selftest_status(rc)
   msg = selftest_verdict(e)
 
-  lines.append("%s > %s : %d/1 not found, %d/1 not matched, %d/1 timeout, %d/1 skipped"
-               % (selftest_context(args, mode, attack, width_label),
-                  msg, e["nf"], e["nm"], e["to"], e["rs"]))
+  lines.append(selftest_line(selftest_context(args, mode, attack, width_label), msg, e))
   note_verdict(msg)
 
   return lines
@@ -4646,6 +4773,7 @@ def selftest_vector_sweep(args):
   sweep_total = 0
   sweep_ok    = 0
   sweep_bad   = ""
+  sweep_fault = ""
   sweep_slow  = ""
   sweep_na    = ""
 
@@ -4674,22 +4802,25 @@ def selftest_vector_sweep(args):
       # falls through to "did not crack", because selftest_vector_test runs in a $(...) subshell and
       # its record_skip never reaches the parent's list (test.sh). So anything that is not
       # OK or Warning, a skip included, is counted as not cracked, and print_skip_summary at the end
-      # of the sweep prints nothing.
+      # of the sweep prints nothing. A Fault, which test.sh did not have, is hashcat failing rather
+      # than a vector that did not crack, so it is listed on its own.
 
       if "> OK :" in text:
         sweep_ok += 1
       elif "> Warning :" in text:
         sweep_slow += "%d " % sweep_mode
+      elif "> Fault :" in text:
+        sweep_fault += "%d " % sweep_mode
       else:
         sweep_bad += "%d " % sweep_mode
 
   if not args.selftest_child:
-    selftest_print_summary(sweep_ok, sweep_total, sweep_slow, sweep_na, sweep_bad)
+    selftest_print_summary(sweep_ok, sweep_total, sweep_slow, sweep_na, sweep_bad, sweep_fault)
 
-  return 1 if sweep_bad else 0
+  return 1 if (sweep_bad or sweep_fault) else 0
 
 
-def selftest_print_summary(sweep_ok, sweep_total, sweep_slow, sweep_na, sweep_bad):
+def selftest_print_summary(sweep_ok, sweep_total, sweep_slow, sweep_na, sweep_bad, sweep_fault):
   print("")
   print("[ test.py ] > %d/%d hash-modes cracked their own self-test vector"
         % (sweep_ok, sweep_total))
@@ -4703,6 +4834,9 @@ def selftest_print_summary(sweep_ok, sweep_total, sweep_slow, sweep_na, sweep_ba
 
   if sweep_bad:
     print("[ test.py ] > did not crack: %s" % sweep_bad)
+
+  if sweep_fault:
+    print("[ test.py ] > hashcat failed: %s" % sweep_fault)
 
 
 def run_parallel_selftest(args):
@@ -4742,6 +4876,7 @@ def run_parallel_selftest(args):
   sweep_slow  = ""
   sweep_na    = ""
   sweep_bad   = ""
+  sweep_fault = ""
 
   print("[ test.py ] > Cracking every hash-mode's own self-test vector")
 
@@ -4765,13 +4900,16 @@ def run_parallel_selftest(args):
       elif "> Warning :" in text:
         sweep_slow += "%d " % mode
         record("Warning")
+      elif "> Fault :" in text:
+        sweep_fault += "%d " % mode
+        record("Fault")
       else:
         sweep_bad += "%d " % mode
         record("not-OK")
 
-  selftest_print_summary(sweep_ok, sweep_total, sweep_slow, sweep_na, sweep_bad)
+  selftest_print_summary(sweep_ok, sweep_total, sweep_slow, sweep_na, sweep_bad, sweep_fault)
 
-  return 1 if sweep_bad else 0
+  return 1 if (sweep_bad or sweep_fault) else 0
 
 
 def widths_for(spec):
@@ -4885,11 +5023,18 @@ EDGE_SKIP_MODES = {2000}
 
 EDGE_SKIP_OUT_MATCH = {14000, 14100, 22000, 22001, 31500, 31600}
 
+# 1500 prints a recovered byte above 0x7f with its top bit cleared wherever that leaves it printable
+# (module_build_plain_postprocess). DES ignores that bit, so the printed password is another spelling
+# of the generated one with the same hash. Its outfile is checked through the module's own verify
+# rather than compared literally.
+
+EDGE_VERIFY_OUT = {1500}
+
 # The modes whose -HH says same-salt is "Not" allowed but that the suite runs with a shared salt
 # anyway (test_edge.sh SKIP_SAME_SALT_HASH_TYPES, the active list).
 
-EDGE_SKIP_SAME_SALT = {6600, 7100, 7200, 8200, 13400, 15300, 15310, 15900, 15910, 16900,
-                       18300, 18900, 20200, 20300, 20400, 27000, 27100, 29700, 29930, 29940}
+EDGE_SKIP_SAME_SALT = {6600, 8200, 13400, 15300, 15310, 15900, 15910, 16900, 18300, 18900,
+                       27000, 27100, 29700, 29930, 29940, 40018, 40019, 40042, 40043, 40044}
 
 EDGE_HH_CACHE = {}
 
@@ -4910,7 +5055,7 @@ def edge_run(opts, mode, target, stdin_bytes, attack, extra):
   # Like run_hashcat, but every argument is bytes, because an edge hash, salt or mask can carry a
   # byte that is not valid ASCII and subprocess will not mix str and bytes in one argv.
 
-  global LAST_CMD
+  global LAST_CMD, LAST_STDIN
 
   argv = [os.fsencode(BIN)]
   argv += [edge_as_bytes(o) for o in with_bridge_opts(opts, mode)]
@@ -4920,6 +5065,7 @@ def edge_run(opts, mode, target, stdin_bytes, attack, extra):
   argv += [edge_as_bytes(x) for x in extra]
 
   LAST_CMD = argv
+  LAST_STDIN = stdin_bytes
 
   proc = subprocess.run(argv, input=stdin_bytes, cwd=ROOT,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -4956,6 +5102,31 @@ def edge_strip_userpw(data):
   # mode that appends a note to the plaintext line still matches. Applied per line here.
 
   return re.sub(rb"    \(user password[^\n]*", b"", data)
+
+
+def edge_out_verifies(mode, raw, hashes, tmp):
+  # The check for a mode in EDGE_VERIFY_OUT once the literal compare has failed. The outfile has to
+  # hold one line for each expected hash, and the module's verify has to accept every line, which
+  # is the run_verify fallback the crack path already takes.
+
+  if (mode in EDGE_VERIFY_OUT) == False:
+    return False
+
+  lines = edge_strip_userpw(raw).rstrip(b"\n").split(b"\n")
+
+  if len(lines) != len(hashes):
+    return False
+
+  for digest in hashes:
+    hits = [line for line in lines if line.startswith(digest + b":")]
+
+    if len(hits) != 1:
+      return False
+
+    if run_verify(mode, digest.decode("ascii"), hits, tmp) == False:
+      return False
+
+  return True
 
 
 def edge_noise_words(word, slow, suffix):
@@ -5389,6 +5560,9 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
     want = edge_echo_norm(hash_out + b":" + (word_compare if word_compare is not None else word))
 
     if got != want:
+      if edge_out_verifies(ctx.mode, raw, [hash_out], tmp) == True:
+        continue
+
       errors += 1
 
       print("[ test.py edge ] !> mismatch Type %d, Attack %d, Kernel %s, Vector %d, Test %d, single"
@@ -5614,6 +5788,9 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
   want = edge_sort_lines(b"".join(l + b"\n" for l in hcout))
 
   if got != want:
+    if edge_out_verifies(mode, raw, [dig for _, _, _, dig in selected], tmp) == True:
+      return 0, 1, False
+
     print("[ test.py edge ] !> mismatch Type %d, Attack %d, Kernel %s, Vector %d, multi"
           % (mode, attack, ctx.ktype, width))
 
@@ -6253,6 +6430,11 @@ def run_bridge(args):
 
 
 def main():
+  # An older python fails inside a test module, with an error that does not name the interpreter.
+
+  if sys.version_info < (3, 10):
+    die("! tools/test.py needs Python 3.10 or newer, and this is %s" % platform.python_version())
+
   # Line-buffer stdout so the serial paths (-S, single mode) stream under CI, where stdout is a
   # pipe Python would otherwise block-buffer. The -j paths already flush by hand.
   try:
@@ -6270,7 +6452,8 @@ def main():
   ap.add_argument("--skip-clean-cache", dest="skip_clean_cache", action="store_true",
                   help="do not clear Apple's Metal compiler caches before the run (Darwin only)")
   ap.add_argument("--metal-compiler-runtime", dest="metal_compiler_runtime", type=int, default=None,
-                  help="hashcat --metal-compiler-runtime in seconds, for a Metal build that needs longer")
+                  help="hashcat --metal-compiler-runtime in seconds, for a Metal build that needs "
+                       "longer than hashcat's 180")
   ap.add_argument("--verbose", dest="verbose", action="store_true",
                   help="drop hashcat's --quiet, so every run's Status, speed and timing reach "
                        "logfull.txt instead of only its cracks")

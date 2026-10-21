@@ -801,7 +801,7 @@ int module_hash_encode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
 
     const u8 *ptr = (const u8 *) seven_zip->coder_attributes;
 
-    for (u32 i = 0, j = 0; i < seven_zip->coder_attributes_len; i += 1, j += 2)
+    for (u32 i = 0; i < seven_zip->coder_attributes_len; i++)
     {
       bytes_written += snprintf (line_buf + bytes_written, line_size - bytes_written, "%02x", ptr[i]);
 
@@ -889,6 +889,7 @@ void module_init (module_ctx_t *module_ctx)
   module_ctx->module_pwdump_column            = MODULE_DEFAULT;
   module_ctx->module_pw_max                   = module_pw_max;
   module_ctx->module_pw_min                   = MODULE_DEFAULT;
+  module_ctx->module_register_options         = MODULE_DEFAULT;
   module_ctx->module_salt_max                 = MODULE_DEFAULT;
   module_ctx->module_salt_min                 = MODULE_DEFAULT;
   module_ctx->module_salt_type                = module_salt_type;
