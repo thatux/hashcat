@@ -1878,6 +1878,7 @@ typedef struct hc_device_param
   u32     kernel_threads_min;
   u32     kernel_threads_max;
 
+  bool    kernel_threads_fixed; // the module requires exactly kernel_threads_min threads, FIXED_LOCAL_SIZE or FORCED_THREAD_COUNT
   bool    overtune_unfriendly;  // whatever sets this decide we operate in a mode that is not allowing to overtune threads_max or accel_max in autotuner
 
   u64     kernel_power;
@@ -2036,6 +2037,12 @@ typedef struct hc_device_param
 
   u64     innerloop_pos;
   u64     innerloop_left;
+
+  // The base words of a slow hash launch. The launch holds innerloop_left amplifier items over all of
+  // them, item after item, so its work item gid is word (gid % amp_base_cnt) under item (gid /
+  // amp_base_cnt). Zero where a launch is just its base words.
+
+  u64     amp_base_cnt;
 
   u32     exec_pos;
   double  exec_msec[EXEC_CACHE];
@@ -4282,7 +4289,7 @@ typedef struct module_ctx
   u32         (*module_dgst_pos3)               (const hashconfig_t *, const user_options_t *, const user_options_extra_t *);
   u32         (*module_dgst_size)               (const hashconfig_t *, const user_options_t *, const user_options_extra_t *);
   u64         (*module_esalt_size)              (const hashconfig_t *, const user_options_t *, const user_options_extra_t *);
-  const char *(*module_extra_tuningdb_block)    (const hashconfig_t *, const user_options_t *, const user_options_extra_t *, const backend_ctx_t *, const hashes_t *, const u32, const u32);
+  char       *(*module_extra_tuningdb_block)    (const hashconfig_t *, const user_options_t *, const user_options_extra_t *, const backend_ctx_t *, const hashes_t *, const u32, const u32);
   u32         (*module_forced_outfile_format)   (const hashconfig_t *, const user_options_t *, const user_options_extra_t *);
   u32         (*module_hash_category)           (const hashconfig_t *, const user_options_t *, const user_options_extra_t *);
   const char *(*module_hash_name)               (const hashconfig_t *, const user_options_t *, const user_options_extra_t *);
