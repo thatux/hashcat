@@ -115,13 +115,21 @@ def test_columns(key, zfilled_key, kinds):
     container_or_archive = bool(present & {"static", "generated"})
     cells = []
 
-    for kind in ("synthetic", "static", "generated"):
+    labels = {
+        "synthetic": "Oracle (synthetic hash)",
+        "static": "Static container (shipped or downloaded)",
+        "generated": "Generated container or archive (test.py -g)",
+    }
+
+    for kind, label in labels.items():
         if kind in present:
             target = f"/tools/test_modules/m{zfilled_key}.py" if kind == "synthetic" else "/tools/test.py"
-            cells.append(f"[:green_circle:]({target})")
+            cells.append(f'[:green_circle:]({target} "{label}: input available")')
         else:
             relevant = (not container_or_archive) if kind == "synthetic" else container_or_archive
-            cells.append(":red_circle:" if relevant else "-")
+            symbol = ":red_circle:" if relevant else "-"
+            status = "input missing" if relevant else "not applicable to this test path"
+            cells.append(f'[{symbol}](#test-inputs "{label}: {status}")')
 
     return " | ".join(cells)
 
