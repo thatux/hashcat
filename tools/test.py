@@ -4484,6 +4484,28 @@ COVERAGE_UNTESTABLE = {
 }
 
 
+def test_input_kinds():
+  kinds = {}
+
+  for filename in sorted(os.listdir(os.path.join(TDIR, "test_modules"))):
+    if filename.startswith("m") and filename.endswith(".py") and filename[1:-3].isdigit():
+      mode = int(filename[1:-3])
+      if mode not in CONTAINER_MODES:
+        kinds.setdefault(mode, []).append("synthetic")
+
+  # Cryptoloop labels select variants of the single mode 14500.
+  static = (CONTAINER_MODES - CL_MODES) | {14500}
+  generated = GEN_MODES.copy()
+  generated -= {mode for mode in TC_MODES if (mode // 10) % 10 in TC_BOOT_DIGITS}
+  generated -= {mode for mode in VC_MODES if (mode // 10) % 10 in VC_BOOT_DIGITS}
+
+  for kind, modes in (("static", static), ("generated", generated)):
+    for mode in modes:
+      kinds.setdefault(mode, []).append(kind)
+
+  return {str(mode): kinds[mode] for mode in sorted(kinds)}
+
+
 def module_hash_name(mode):
   m = re.search(rb'HASH_NAME\s*=\s*"([^"]*)"', module_source(mode))
 
@@ -6518,6 +6540,9 @@ def main():
                        "need sudo. On its own runs every mode -g can build.")
   ap.add_argument("--test-coverage", dest="test_coverage", action="store_true",
                   help="report modes with no test and exit; reads the source tree, needs no hashcat")
+  ap.add_argument("--input-kinds", action="store_true",
+                  help="print a JSON map of registered synthetic, static and generated test inputs; "
+                       "reads the source tree, needs no hashcat")
   ap.add_argument("--list-container-modes", dest="list_container_modes", action="store_true",
                   help="print the container test modes (TrueCrypt, VeraCrypt, CryptoLoop, LUKS) and exit; "
                        "these crack a shipped or fetched container file and have no oracle, so a mode "
@@ -6550,6 +6575,10 @@ def main():
                   help=argparse.SUPPRESS)
 
   args = ap.parse_args()
+
+  if args.input_kinds:
+    print(json.dumps(test_input_kinds()))
+    sys.exit(0)
 
   # --test-coverage reads the source tree only, so it runs before the isolation and binary checks.
   if args.test_coverage:

@@ -9,6 +9,7 @@ import sys
 import json
 import os
 import re
+import subprocess
 
 # Replace LUKS v1 and v2 hashes, they're too big: Github no longer shows the .md "(Sorry about that, but we can’t show files that are this big right now.)"
 EXAMPLE_HASH_REPLACEMENTS = {
@@ -31,6 +32,7 @@ EXAMPLE_HASH_REPLACEMENTS = {
 OPENCL_DIR = "../../OpenCL"
 MODULES_DIR = "../../src/modules"
 TESTS_DIR = "../../tools/test_modules"
+TESTPY = "../../tools/test.py"
 
 OPENCL_ABBREV = {
     "_a0-pure": "a0p",
@@ -101,71 +103,27 @@ def uses_hash_recipe(zfilled_key):
             return value == "module_hash_recipe;"
     return False
 
-def find_test(zfilled_key):
-    """Return markdown links for Perl tests"""
-    # List of TrueCrypt modes which have test containers
-    TC_MODES = [
-        "6211", "6212", "6213",
-        "6221", "6222", "6223",
-        "6231", "6232", "6233",
-        "6241", "6242", "6243",
-        "29311", "29312", "29313",
-        "29321", "29322", "29323",
-        "29331", "29332", "29333",
-        "29341", "29342", "29343"
-    ]
+def load_input_kinds():
+    """Read registered test inputs from the test runner."""
+    out = subprocess.run([sys.executable, TESTPY, "--input-kinds"],
+                         stdout=subprocess.PIPE, check=True).stdout
+    return json.loads(out)
 
-    # List of VeraCrypt modes which have test containers
-    VC_MODES = [
-        "13711", "13712", "13713",
-        "13721", "13722", "13723",
-        "13731", "13732", "13733",
-        "13741", "13742", "13743",
-        "13751", "13752", "13753",
-        "13761", "13762", "13763",
-        "13771", "13772", "13773",
-        "13781", "13782", "13783",
-        "29411", "29412", "29413",
-        "29421", "29422", "29423",
-        "29431", "29432", "29433",
-        "29441", "29442", "29443",
-        "29451", "29452", "29453",
-        "29461", "29462", "29463",
-        "29471", "29472", "29473",
-        "29481", "29482", "29483",
-        "29491", "29492", "29493"
-    ]
+def test_dots(key, zfilled_key, kinds):
+    """Render registered input kinds in a fixed order."""
+    present = set(kinds.get(key, []))
+    container_or_archive = bool(present & {"static", "generated"})
+    cells = []
 
-    # List of LUKS modes which have test containers
-    LUKS_MODES = [
-        "14600",
-        "29511", "29512", "29513",
-        "29521", "29522", "29523",
-        "29531", "29532", "29533",
-        "29541", "29542", "29543"
-    ]
+    for kind in ("synthetic", "static", "generated"):
+        if kind in present:
+            target = f"/tools/test_modules/m{zfilled_key}.py" if kind == "synthetic" else "/tools/test.py"
+            cells.append(f"[:green_circle:]({target})")
+        else:
+            relevant = (not container_or_archive) if kind == "synthetic" else container_or_archive
+            cells.append(":red_circle:" if relevant else "-")
 
-    # Cryptoloop mode which have test containers
-    CL_MODES = [
-        "14511", "14512", "14513",
-        "14521", "14522", "14523",
-        "14531", "14532", "14533",
-        "14541", "14542", "14543",
-        "14551", "14552", "14553"
-    ]
-
-    ALL_MODES = TC_MODES + VC_MODES + LUKS_MODES + CL_MODES
-
-    if zfilled_key in [m.zfill(5) for m in ALL_MODES]:
-        return f"[:white_check_mark:](/tools/test.py)"
-
-    if os.path.isdir(TESTS_DIR):
-        for filename in sorted(os.listdir(TESTS_DIR)):
-            if zfilled_key in filename:
-                return f"[:white_check_mark:](/{TESTS_DIR}/{filename})"
-
-    #test not found
-    return ":x:"
+    return " ".join(cells)
 
 def main():
     input_data = sys.stdin.read()
@@ -174,6 +132,8 @@ def main():
     except json.JSONDecodeError as e:
         sys.stderr.write(f"❌ Invalid JSON input: {e}\n")
         sys.exit(1)
+
+    kinds = load_input_kinds()
 
     footnote_map = {}
     footnote_counter = 1
@@ -216,19 +176,7 @@ def main():
 
         zfilled_key = key.zfill(5)
         opencl_links = find_opencl(zfilled_key)
-        test_link = find_test(zfilled_key)
-
-        # A mode whose test link points at test.py is one of the container modes: it is exercised
-        # only against a crypto container, so note that its test needs a shipped or freshly built
-        # container, not a hash the oracle makes from a password.
-        if test_link == "[:white_check_mark:](/tools/test.py)":
-            footnote_val = ("Tested only against a crypto container: a shipped test container or one "
-                            "built on the fly by tools/test.py. It has no example-hash oracle that "
-                            "runs without a container.")
-            if footnote_val not in footnote_map:
-                footnote_map[footnote_val] = footnote_counter
-                footnote_counter += 1
-            footnote += f"[^{footnote_map[footnote_val]}]"
+        test_link = test_dots(key, zfilled_key, kinds)
 
         # A recipe mode has no pure kernel files of its own: the pure path is compiled from a recipe
         # into the mode 4000 kernels, so find_opencl only sees the optimized kernels, or none. Add a
