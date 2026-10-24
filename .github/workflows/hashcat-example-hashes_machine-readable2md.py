@@ -127,7 +127,7 @@ def test_columns(key, zfilled_key, kinds):
             cells.append(f'[:green_circle:]({target} "{label}: input available")')
         else:
             relevant = (not container_or_archive) if kind == "synthetic" else container_or_archive
-            symbol = ":red_circle:" if relevant else "-"
+            symbol = ":red_circle:" if relevant else ":white_circle:"
             status = "input missing" if relevant else "not applicable to this test path"
             cells.append(f'[{symbol}](#test-inputs "{label}: {status}")')
 

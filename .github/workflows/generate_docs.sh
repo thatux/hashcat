@@ -25,7 +25,7 @@ echo '### Test inputs' >> ../../docs/hashcat-example-hashes.md
 echo '' >> ../../docs/hashcat-example-hashes.md
 echo 'Tests, from left to right: **Oracle**: a synthetic hash generated from a password. **Static**: a shipped or downloaded container. **Generated**: a container or archive built with `tools/test.py -g`.' >> ../../docs/hashcat-example-hashes.md
 echo '' >> ../../docs/hashcat-example-hashes.md
-echo ':green_circle: Available input &nbsp; :red_circle: Missing input &nbsp; `-` Not applicable to this test path. These indicators show registered inputs, not test results. Additional tools, downloads or privileges may be required.' >> ../../docs/hashcat-example-hashes.md
+echo ':green_circle: Available input &nbsp; :red_circle: Missing input &nbsp; :white_circle: Not applicable to this test path. These indicators show registered inputs, not test results. Additional tools, downloads or privileges may be required.' >> ../../docs/hashcat-example-hashes.md
 echo '' >> ../../docs/hashcat-example-hashes.md
 echo '| Mode | Hash name | [Tests](#test-inputs "Oracle, static container, generated container or archive") | Kernels | Example |' >> ../../docs/hashcat-example-hashes.md
 echo '|:-----|:----------|:-----:|:--------|:--------|' >> ../../docs/hashcat-example-hashes.md
