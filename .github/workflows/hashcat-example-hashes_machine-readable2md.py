@@ -129,6 +129,9 @@ def test_columns(key, zfilled_key, kinds):
             relevant = (not container_or_archive) if kind == "synthetic" else container_or_archive
             symbol = ":red_circle:" if relevant else ":white_circle:"
             status = "input missing" if relevant else "not applicable to this test path"
+            if kind == "static" and "generated" in present:
+                symbol = ":orange_circle:"
+                status = "no static fixture, generated-file test available"
             cells.append(f'[{symbol}](#test-inputs "{label}: {status}")')
 
     return "&nbsp;".join(cells)
