@@ -5354,7 +5354,7 @@ EDGE_WIDTHS     = [1, 2, 4, 8, 16]
 EDGE_RUNTIME    = 270
 
 # 2000 (STDOUT) has an empty kernel and never cracks, so edge-cracking it only makes errors
-# (test_edge.sh SKIP_HASH_TYPES). The deprecated WPA modes are dropped by the -HH check instead.
+# (test_edge.sh SKIP_HASH_TYPES). Deprecated modes require an explicit module option to run.
 
 EDGE_SKIP_MODES = {2000}
 
@@ -6223,7 +6223,7 @@ def edge_process_mode(args, mode, cfg, tmp):
 
   hh = edge_hh(mode)
 
-  if hh["deprecated"]:
+  if hh["deprecated"] and "--deprecated-check-disable" not in module_opts(mode):
     print("[ test.py edge ] > Skip Type %d (is deprecated)" % mode)
 
     return 0, 0
