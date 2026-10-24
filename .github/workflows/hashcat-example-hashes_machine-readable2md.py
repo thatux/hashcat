@@ -109,8 +109,8 @@ def load_input_kinds():
                          stdout=subprocess.PIPE, check=True).stdout
     return json.loads(out)
 
-def test_dots(key, zfilled_key, kinds):
-    """Render registered input kinds in a fixed order."""
+def test_columns(key, zfilled_key, kinds):
+    """Render one indicator per named test-input column."""
     present = set(kinds.get(key, []))
     container_or_archive = bool(present & {"static", "generated"})
     cells = []
@@ -123,7 +123,7 @@ def test_dots(key, zfilled_key, kinds):
             relevant = (not container_or_archive) if kind == "synthetic" else container_or_archive
             cells.append(":red_circle:" if relevant else "-")
 
-    return " ".join(cells)
+    return " | ".join(cells)
 
 def main():
     input_data = sys.stdin.read()
@@ -176,7 +176,7 @@ def main():
 
         zfilled_key = key.zfill(5)
         opencl_links = find_opencl(zfilled_key)
-        test_link = test_dots(key, zfilled_key, kinds)
+        test_link = test_columns(key, zfilled_key, kinds)
 
         # A recipe mode has no pure kernel files of its own: the pure path is compiled from a recipe
         # into the mode 4000 kernels, so find_opencl only sees the optimized kernels, or none. Add a
