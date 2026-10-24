@@ -110,7 +110,7 @@ def load_input_kinds():
     return json.loads(out)
 
 def test_columns(key, zfilled_key, kinds):
-    """Render one indicator per named test-input column."""
+    """Render a nonbreaking strip of test indicators with descriptive tooltips."""
     present = set(kinds.get(key, []))
     container_or_archive = bool(present & {"static", "generated"})
     cells = []
@@ -131,7 +131,7 @@ def test_columns(key, zfilled_key, kinds):
             status = "input missing" if relevant else "not applicable to this test path"
             cells.append(f'[{symbol}](#test-inputs "{label}: {status}")')
 
-    return " | ".join(cells)
+    return "&nbsp;".join(cells)
 
 def main():
     input_data = sys.stdin.read()

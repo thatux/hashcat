@@ -23,12 +23,12 @@ echo 'All manual changes will be overwritten!' >> ../../docs/hashcat-example-has
 echo '' >> ../../docs/hashcat-example-hashes.md
 echo '### Test inputs' >> ../../docs/hashcat-example-hashes.md
 echo '' >> ../../docs/hashcat-example-hashes.md
-echo '**Oracle**: a synthetic hash generated from a password. **Static**: a shipped or downloaded container. **Generated**: a container or archive built with `tools/test.py -g`.' >> ../../docs/hashcat-example-hashes.md
+echo 'Tests, from left to right: **Oracle**: a synthetic hash generated from a password. **Static**: a shipped or downloaded container. **Generated**: a container or archive built with `tools/test.py -g`.' >> ../../docs/hashcat-example-hashes.md
 echo '' >> ../../docs/hashcat-example-hashes.md
 echo ':green_circle: Available input &nbsp; :red_circle: Missing input &nbsp; `-` Not applicable to this test path. These indicators show registered inputs, not test results. Additional tools, downloads or privileges may be required.' >> ../../docs/hashcat-example-hashes.md
 echo '' >> ../../docs/hashcat-example-hashes.md
-echo '| Mode | Hash name | [Oracle](#test-inputs "Synthetic hash oracle") | [Static](#test-inputs "Shipped or downloaded container") | [Generated](#test-inputs "Container or archive built with test.py -g") | Kernels | Example |' >> ../../docs/hashcat-example-hashes.md
-echo '|:-----|:----------|:------:|:------:|:---------:|:--------|:--------|' >> ../../docs/hashcat-example-hashes.md
+echo '| Mode | Hash name | [Tests](#test-inputs "Oracle, static container, generated container or archive") | Kernels | Example |' >> ../../docs/hashcat-example-hashes.md
+echo '|:-----|:----------|:-----:|:--------|:--------|' >> ../../docs/hashcat-example-hashes.md
 ./../../hashcat --example-hashes --machine-readable --quiet | python3 ./hashcat-example-hashes_machine-readable2md.py >> ../../docs/hashcat-example-hashes.md
 
 echo "Done generate_docs.sh"
