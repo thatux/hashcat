@@ -193,7 +193,7 @@ def main():
         name = md_remove_backticks_and_pipes(name)
         example_hash = md_remove_backticks_and_pipes(example_hash)
 
-        row = f"| [`{key}`](/src/modules/module_{zfilled_key}.c) | `{name}`{footnote} | <sup> {opencl_links} </sup> | {test_link} | `{example_hash}` |"
+        row = f"| [`{key}`](/src/modules/module_{zfilled_key}.c) | `{name}`{footnote} | {test_link} | <sup> {opencl_links} </sup> | `{example_hash}` |"
         table_rows.append(row)
 
     # Print the table
