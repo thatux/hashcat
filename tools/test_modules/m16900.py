@@ -14,6 +14,16 @@ from lib.test_helpers import random_hex_string, split_hash_word
 # needed here), then HMAC-SHA256 over the ciphertext keyed with bytes 32 to 64.
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'allow_same_salt': 'The edge fixtures retain shared salts despite the mode capability flag.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[0, 256], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

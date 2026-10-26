@@ -24,6 +24,21 @@ def module_get_random_password(word):
   return hashlib.sha256(word).hexdigest().encode("ascii")
 
 
+def module_test_constraints():
+  return {
+    'ordinary': {
+      'all': {
+        'password_only': 'The recovered hash encoding differs from the oracle input. Compare the recovered password.',
+      },
+    },
+    'edge': {
+      'all': {
+        'exclude': 'This hash mode is deprecated.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[64, 64], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

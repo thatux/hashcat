@@ -257,6 +257,16 @@ def _cbc_decrypt(dec_block, iv, data, unpad):
 
 # --- KeePass ---
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'allow_same_salt': 'The edge fixtures retain shared salts despite the mode capability flag.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[0, 256], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

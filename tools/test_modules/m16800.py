@@ -18,6 +18,21 @@ from lib.test_helpers import random_bytes, random_number
 # check needs.
 
 
+def module_test_constraints():
+  return {
+    'ordinary': {
+      'all': {
+        'password_only': 'The recovered hash encoding differs from the oracle input. Compare the recovered password.',
+      },
+    },
+    'edge': {
+      'all': {
+        'exclude': 'This hash mode is deprecated.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[8, 63], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

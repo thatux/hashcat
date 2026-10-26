@@ -171,6 +171,31 @@ def _bip32_seed_key(seed):
   return (int.from_bytes(child[:32], "big") + k_par) % N
 
 
+def module_test_constraints():
+  return {
+    'ordinary': {
+      'all': {
+        'whole_word': 'Structured oracle candidates require whole-word attacks.',
+      },
+      1: {
+        'exclude': 'The structured oracle candidates require whole-word attacks.',
+      },
+      3: {
+        'exclude': 'The structured oracle candidates require whole-word attacks.',
+      },
+      6: {
+        'exclude': 'The structured oracle candidates require whole-word attacks.',
+      },
+      7: {
+        'exclude': 'The structured oracle candidates require whole-word attacks.',
+      },
+      12: {
+        'exclude': 'The structured oracle candidates require whole-word attacks.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[51, 51], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

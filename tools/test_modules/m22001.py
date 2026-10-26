@@ -26,6 +26,16 @@ from lib.test_helpers import random_number, random_bytes, pack_hex
 # hierarchy, so FT is defined for key version 3 only.
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'skip_output': 'The recovered representation differs from the oracle hash/password pair. Check the exit status only.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[64, 64], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

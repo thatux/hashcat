@@ -12,6 +12,16 @@ from lib.test_helpers import pack_hex
 # packed the hex twice, once itself and once in generate; the python one packs it once.
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'allow_same_salt': 'The edge fixtures retain shared salts despite the mode capability flag.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[32, 32], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

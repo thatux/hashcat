@@ -10,6 +10,16 @@ from lib import pkzip
 # PKZIP ZipCrypto, the container shape for mode 17230, see lib/pkzip.py.
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'verify_output': 'A different valid plaintext can be recovered. Verify it with the oracle.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[0, 64], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

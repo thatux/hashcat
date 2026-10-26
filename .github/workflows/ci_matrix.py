@@ -25,6 +25,9 @@ import subprocess
 import sys
 import zlib
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))
+from test_policies import has_rule
+
 # test.py takes about 100 minutes on the largest of 16 shards on a 12 core laptop, which on a 4 core
 # runner is too close to the 330 minute job limit, so it gets three times the shards fuzz does
 
@@ -203,8 +206,8 @@ def edge_matrix(modes):
 
 @functools.lru_cache(maxsize=None)
 def edge_supported(mode):
-    # STDOUT has no cracking kernel. Deprecated modes are covered by the ordinary suite.
-    if mode == 2000:
+    # Per-mode edge exclusions are declared beside the oracle.
+    if has_rule(mode, "edge", "all", "exclude"):
         return False
 
     with open("src/modules/module_%05d.c" % mode) as fh:
@@ -468,6 +471,13 @@ def main():
                      if kind == "test" else ", shared code changed")
 
         notes.append(note)
+
+    if "--vector-width" in sys.argv:
+        i = sys.argv.index("--vector-width")
+        value = sys.argv[i + 1] if i + 1 < len(sys.argv) else ""
+        if value not in ("1", "2", "4", "8", "16"):
+            sys.exit("ci_matrix.py: vector width must be 1, 2, 4, 8 or 16")
+        matrix = [entry for entry in matrix if entry.get("vector_width", int(value)) == int(value)]
 
     if len(matrix) > 256:
         sys.exit(f"ci_matrix.py: {len(matrix)} jobs exceed GitHub's 256-job matrix limit. Reduce shard counts or selected kinds.")

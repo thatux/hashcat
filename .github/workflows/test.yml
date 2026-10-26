@@ -80,6 +80,15 @@ on:
         description: 'Test edge cases (both kernel types and all vector widths)'
         type: boolean
         default: false
+      attack:
+        description: 'Optional attack filter for focused kernel/edge checks'
+        default: ''
+      target:
+        description: 'Optional target filter: single or multi'
+        default: ''
+      vector_width:
+        description: 'Optional vector-width filter for focused kernel/edge checks'
+        default: ''
   pull_request:
     paths:
       - 'OpenCL/**'
@@ -121,7 +130,10 @@ jobs:
           BRIDGE: ${{ inputs.bridge }}
           CONTAINER: ${{ inputs.container }}
           EDGE: ${{ inputs.edge }}
+          TEST_VECTOR_WIDTH: ${{ inputs.vector_width }}
         run: |
+          python3 tools/test_policies_tests.py
+
           # Weekly runs include edge tests. Manual runs select kinds with checkboxes.
           # An empty manual selection keeps the four ordinary kinds.
           kinds=""
@@ -135,17 +147,19 @@ jobs:
           fi
           [ -z "$kinds" ] && kinds="opt pure bridge container"
           kinds_arg="--kinds $(echo $kinds | tr ' ' ',')"
+          width_args=()
+          if [ -n "$TEST_VECTOR_WIDTH" ]; then width_args=(--vector-width "$TEST_VECTOR_WIDTH"); fi
 
           if [ "$EVENT" = "pull_request" ]; then
             python3 .github/workflows/ci_matrix.py test pr "$BASE" | tee -a "$GITHUB_OUTPUT"
           elif [ "$EVENT" = "workflow_dispatch" ] && [ "$MODES" != "all" ]; then
-            python3 .github/workflows/ci_matrix.py test list "$MODES" $kinds_arg | tee -a "$GITHUB_OUTPUT"
+            python3 .github/workflows/ci_matrix.py test list "$MODES" $kinds_arg "${width_args[@]}" | tee -a "$GITHUB_OUTPUT"
           elif [ "$EVENT" = "schedule" ] &&
                [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $(( 7 * 86400 )) ]; then
             echo "no commit on master in the last seven days, nothing new to test"
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
-            python3 .github/workflows/ci_matrix.py test all $kinds_arg | tee -a "$GITHUB_OUTPUT"
+            python3 .github/workflows/ci_matrix.py test all $kinds_arg "${width_args[@]}" | tee -a "$GITHUB_OUTPUT"
           fi
 
   test:
@@ -248,6 +262,9 @@ jobs:
           MODES: ${{ matrix.modes }}
           KIND: ${{ matrix.kind }}
           VECTOR_WIDTH: ${{ matrix.vector_width }}
+          TEST_ATTACK: ${{ inputs.attack }}
+          TEST_TARGET: ${{ inputs.target }}
+          TEST_VECTOR_WIDTH: ${{ inputs.vector_width }}
         run: |
           # A shared-code change with no mode of its own runs test.py -M's 24
           # representative modes, sharded by ci_matrix.py into per-mode lists that
@@ -282,6 +299,12 @@ jobs:
 
           fail=0
           failed_modes=""
+
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$KIND" != "bridge" ] && [ "$KIND" != "container" ]; then
+            if [ -n "$TEST_ATTACK" ]; then OPTS="$OPTS -a $TEST_ATTACK"; fi
+            if [ -n "$TEST_TARGET" ]; then OPTS="$OPTS -t $TEST_TARGET"; fi
+            if [ -n "$TEST_VECTOR_WIDTH" ]; then OPTS="$OPTS -V $TEST_VECTOR_WIDTH"; fi
+          fi
 
           for mode in $MODES; do
             tuning=""

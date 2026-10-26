@@ -71,6 +71,16 @@ def _keystream(key, counter_bin, iv_bin, length):
   return bytes(out[:length])
 
 
+def module_test_constraints():
+  return {
+    'ordinary': {
+      12: {
+        'exclude': "The current hybrid mask fixture cannot express this mode's candidate layout.",
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[-1, -1], [-1, -1], [32, 32], [-1, -1], [-1, -1]]
 

@@ -18,6 +18,16 @@ from lib.test_helpers import split_hash_word
 # runner's non_ascii_supported () pin the generated password to ASCII.
 
 
+def module_test_constraints():
+  return {
+    'selftest': {
+      'all': {
+        'exclude': 'This mode has no published cracking self-test vector.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[1, 55], [-1, -1], [1, 55], [-1, -1], [-1, -1]]
 

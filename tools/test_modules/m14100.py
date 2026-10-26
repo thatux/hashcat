@@ -13,6 +13,21 @@ from lib.test_helpers import split_hash_salt_word
 # encrypt. The 24 byte password is the key material split into thirds.
 
 
+def module_test_constraints():
+  return {
+    'ordinary': {
+      12: {
+        'exclude': "The current hybrid mask fixture cannot express this mode's candidate layout.",
+      },
+    },
+    'edge': {
+      'all': {
+        'skip_output': 'The recovered representation differs from the oracle hash/password pair. Check the exit status only.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[24, 24], [16, 16], [-1, -1], [-1, -1], [-1, -1]]
 

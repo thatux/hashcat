@@ -14,6 +14,16 @@ from lib.test_helpers import split_hash_word
 # printable, and the oracle's own verify accepts it.
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'verify_output': 'A different valid plaintext can be recovered. Verify it with the oracle.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[0, 8], [2, 2], [-1, -1], [-1, -1], [-1, -1]]
 

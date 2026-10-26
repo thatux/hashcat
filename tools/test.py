@@ -35,6 +35,8 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from test_policies import has_rule, modes_with_rule, rules_for
+
 # On Windows hashcat writes CRLF to a text mode stdout, and every parser below matches LF terminated
 # lines, so CRLF is folded to LF in whatever a run captures.
 if os.name == "nt":
@@ -580,23 +582,10 @@ def on_sigint(signum, frame):
 SINGLE_MAX = 32     # test.sh caps a single-target run at 32 hashes
 RUNTIME    = 400    # hashcat --runtime, as test.sh sets it
 
-# A binary-hashfile mode (OPTS_TYPE_BINARY_HASHFILE) is handed a file, not a hash string, so the
-# oracle prints the file base64 encoded and the manager decodes it back to a file (test.sh).
-# For those, and for the two encoding exceptions, the recovered line does not carry the
-# hash we started from, so the match is on ":password" alone (test.sh PASS_ONLY).
-
-NOCHECK_ENCODING = {16800, 16801, 22000}
-
 # Modes whose only kernel is the mask attack (mfulc 37000 ships m37000_a3-pure.cl and nothing else),
 # so every other attack has no kernel to run and is left out rather than failing on a missing file.
 
-MASK_ONLY_MODES = {37000}
-
-# MIFARE Ultralight C 3DES key recovery: the key recovery is not unique, so hashcat may recover a
-# different valid 4 byte segment than the oracle used. Its crack is scored by the hash appearing in
-# the output, whatever segment was printed with it.
-
-MFULC_MODES = {37000}
+MASK_ONLY_MODES = modes_with_rule('selftest', 3, 'mask_only')
 
 # The LUKS modes whose hashes are container paths, not the generator's own output. whole_word_vectors
 # leaves their -a 4 list alone (test.sh); 40023 takes its hash from another field and is excluded
@@ -620,7 +609,7 @@ SELFTEST_RUNTIME = 60
 # and 14600 is LUKS, whose example hash is N/A and lives in external container files. The sweep still
 # runs them and prints their line, but does not count them as cracked or as a failure. test.sh keeps
 # the same set (selftest_vector_sweep), so the two stay comparable.
-NO_SELFTEST = {2000, 14600, 99999}
+NO_SELFTEST = modes_with_rule('selftest', 'all', 'exclude')
 
 # test.sh's attack order for -a all (test.sh). A slow mode only runs the attacks that
 # cost one candidate per word (the whole word attacks), so it gets 0, 4, 8 and 9 and nothing else,
@@ -633,8 +622,7 @@ WHOLE_WORD   = (0, 4, 8, 9)
 # the mask attacks cannot express (test.sh). 400 is run as a fast hash on purpose, to cover
 # the AMP kernel (test.sh).
 
-FAKE_SLOW = {28501, 28502, 28503, 28504, 28505, 28506, 30901, 30902, 30903, 30904, 30905, 30906,
-             34700}
+FAKE_SLOW = modes_with_rule('ordinary', 'all', 'whole_word')
 
 # The oracle writes one shell line per vector: echo <word> | ./hashcat ${OPTS} -a 0 -m <n> '<h>'.
 # The word is padded to 31 with trailing spaces by the "%-31s" the oracle uses; the hash is single
@@ -1097,8 +1085,8 @@ def a4_vectors(mode, pairs, optimized):
 def attacks_for(spec, mode):
   wanted = ATTACK_ORDER if spec == "all" else [int(spec)]
 
-  if spec == "all" and mode in A12_SKIP:
-    wanted = [a for a in wanted if a != 12]
+  if spec == "all":
+    wanted = [a for a in wanted if not has_rule(mode, "ordinary", a, "exclude")]
 
   if mode in MASK_ONLY_MODES:
     return [a for a in wanted if a == 3]
@@ -1300,7 +1288,7 @@ def run_single(opts, mode, pairs, args, width, file_only, pass_only, tmp):
 
     rc, out = run_hashcat(opts, mode, target, candidate + b"\n")
 
-    matched = output_has_crack(mode, out, word, digest, pass_only, tmp)
+    matched = output_has_crack(mode, out, word, digest, pass_only, tmp, attack=0)
 
     classify(rc, matched, c)
 
@@ -1330,7 +1318,7 @@ def run_multi(opts, mode, pairs, args, width, file_only, pass_only, tmp):
   # output, and status is called once (test.sh). So the count here is 1, not one per hash
   # the way single is, and classify does the "cracked but a pair is missing" rewrite.
 
-  matched = all(output_has_crack(mode, out, word, digest, pass_only, tmp) for word, digest in pairs)
+  matched = all(output_has_crack(mode, out, word, digest, pass_only, tmp, attack=0) for word, digest in pairs)
 
   classify(rc, matched, c)
 
@@ -1453,7 +1441,7 @@ def whole_word_single(r, attack):
 
     rc, out = run_hashcat(r.opts, r.mode, target, None, attack=attack, extra=extra)
 
-    matched = output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp)
+    matched = output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp, attack=attack)
 
     classify(rc, matched, c)
 
@@ -1512,7 +1500,7 @@ def whole_word_multi(r, attack):
 
   # As with -a 0 multi, one hashcat run scored as one test: every pair must be in the output.
 
-  matched = all(output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp) for word, digest in mpairs)
+  matched = all(output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp, attack=attack) for word, digest in mpairs)
 
   classify(rc, matched, c)
 
@@ -1746,7 +1734,7 @@ def run_combinator_single(r, dict1_lines, dict2_lines, dict1_path, dict2_path):
       # dict1[k] . dict2[k] reconstructs the word, so the expected plain is the password itself,
       # the same string -a 0 searches for (test.sh).
 
-      matched = output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp)
+      matched = output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp, attack=1)
 
       classify(rc, matched, c)
 
@@ -1779,7 +1767,7 @@ def run_combinator_multi(r, dict1_path, dict2_path):
   # One hashcat run scored as one test (test.sh): every selected pair has to be in the
   # output, and each expected plain is the password because the halves rejoin to it.
 
-  matched = all(output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp) for word, digest in sel)
+  matched = all(output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp, attack=1) for word, digest in sel)
 
   classify(rc, matched, c)
 
@@ -1878,12 +1866,14 @@ def run_verify(mode, digest, crack_lines, tmp):
   return os.path.getsize(out_file) > 0
 
 
-def output_has_crack(mode, out, word, digest, pass_only, tmp):
+def output_has_crack(mode, out, word, digest, pass_only, tmp, attack=0):
   # test.sh output_has_crack (test.sh). The recovered line hash:password is looked for as it was
   # generated first. A mode that drops bits of the password can print a different password with the
   # same hash, so DES for one keeps 7 bits per byte, and a line that is not there verbatim is
   # re-checked by hash through the module's verify. A password only search has no hash to verify
   # against and stops at the plain comparison.
+
+  pass_only = pass_only or has_rule(mode, "ordinary", attack, "password_only")
 
   if match_search(digest, word, pass_only) in out:
     return True
@@ -1895,7 +1885,7 @@ def output_has_crack(mode, out, word, digest, pass_only, tmp):
     if match_search(digest, word.hex().encode("ascii"), pass_only) in out:
       return True
 
-  if mode in MFULC_MODES:
+  if has_rule(mode, "ordinary", attack, "hash_only"):
     if digest.encode("ascii") + b":" in out:
       return True
 
@@ -2010,7 +2000,7 @@ def attack_3_single(r):
 
     rc, out = run_hashcat(r.opts, r.mode, target, None, attack=3, extra=[mask])
 
-    matched = output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp)
+    matched = output_has_crack(r.mode, out, word, digest, r.pass_only, r.tmp, attack=3)
 
     classify(rc, matched, c)
 
@@ -2160,7 +2150,7 @@ def attack_3_multi(r):
 
   if rc == 0:
     matched = all(output_has_crack(r.mode, out, words[idx + cracks_offset], digests[k],
-                                   r.pass_only, r.tmp)
+                                   r.pass_only, r.tmp, attack=3)
                   for idx, k in enumerate(sel))
   else:
     matched = False
@@ -2414,7 +2404,7 @@ def attack_6_single(r):
       search_word = sed_line(dict1_lines, line_nr) + sed_line(dict2_lines, line_nr)
 
       matched = output_has_crack(r.mode, out, search_word, digest,
-                                 r.pass_only, r.tmp) if rc == 0 else False
+                                 r.pass_only, r.tmp, attack=6) if rc == 0 else False
 
       classify(rc, matched, c)
 
@@ -2524,7 +2514,7 @@ def attack_6_multi(r):
     if rc == 0:
       for j, (_, digest) in enumerate(pairs):
         if not output_has_crack(r.mode, out, sed_line(d1, j + 1) + sed_line(d2, j + 1),
-                                digest, r.pass_only, r.tmp):
+                                digest, r.pass_only, r.tmp, attack=6):
           matched = False
 
           break
@@ -2674,7 +2664,7 @@ def attack_7_single(r):
       search_word = sed_line(d1_lines, read_nr) + sed_line(d2_lines, read_nr)
 
       matched = output_has_crack(r.mode, out, search_word, digest,
-                                 r.pass_only, r.tmp) if rc == 0 else False
+                                 r.pass_only, r.tmp, attack=7) if rc == 0 else False
 
       classify(rc, matched, c)
 
@@ -2773,7 +2763,7 @@ def attack_7_multi(r):
     if rc == 0:
       for j, (_, digest) in enumerate(pairs):
         if not output_has_crack(r.mode, out, sed_line(d1, j + 1) + sed_line(d2, j + 1),
-                                digest, r.pass_only, r.tmp):
+                                digest, r.pass_only, r.tmp, attack=7):
           matched = False
 
           break
@@ -2807,7 +2797,6 @@ def attack_7(r):
 # nothing for a mask on both sides of the word to vary, and 20510 reports a plaintext that is not the
 # candidate it was given. attack_6 and attack_7 already cover these (test.sh).
 
-A12_SKIP = {14000, 14100, 14900, 15400, 20510}
 
 
 def a12_single_max(mode):
@@ -2822,7 +2811,7 @@ def a12_single_max(mode):
 def report_skip_counts(r, target_name):
   note_verdict("Skip")
 
-  # test.sh attack_12 forces the summary to Skip for an A12_SKIP mode while still printing the zeroed
+  # An excluded attack 12 forces the summary to Skip while still printing the zeroed
   # counts line, not the reason form report_skip uses (test.sh). The loop breaks
   # before any candidate runs, so every count is zero.
 
@@ -2834,7 +2823,7 @@ def report_skip_counts(r, target_name):
 
 
 def attack_12_single(r):
-  if r.mode in A12_SKIP:
+  if has_rule(r.mode, "ordinary", 12, "exclude"):
     report_skip_counts(r, "single")
 
     return
@@ -2926,7 +2915,7 @@ def attack_12_single(r):
                                 extra=hybrid_extra([mask] + dicts))
 
           matched = output_has_crack(r.mode, out, word, digest,
-                                     r.pass_only, r.tmp) if rc == 0 else False
+                                     r.pass_only, r.tmp, attack=12) if rc == 0 else False
 
           classify(rc, matched, c)
 
@@ -2940,7 +2929,7 @@ def attack_12_multi(r):
   if has_multi_hash(r.mode):
     return
 
-  if r.mode in A12_SKIP:
+  if has_rule(r.mode, "ordinary", 12, "exclude"):
     report_skip_counts(r, "multi")
 
     return
@@ -3002,7 +2991,7 @@ def attack_12_multi(r):
       if rc == 0:
         for j, (_, digest) in enumerate(pairs):
           if not output_has_crack(r.mode, out, sed_line(d1, j + 1) + sed_line(d2, j + 1),
-                                  digest, r.pass_only, r.tmp):
+                                  digest, r.pass_only, r.tmp, attack=12):
             matched = False
 
             break
@@ -5093,29 +5082,7 @@ EDGE_RUNTIME    = 270
 # 2000 (STDOUT) has an empty kernel and never cracks, so edge-cracking it only makes errors
 # (test_edge.sh SKIP_HASH_TYPES). The deprecated WPA modes are dropped by the -HH check instead.
 
-EDGE_SKIP_MODES = {2000}
-
-# 14000/14100/31500/31600 crack a plaintext other than the one the hash was made from, and
-# 22000/22001 write the handshake parts rather than hash and plaintext, so their outfile cannot be
-# compared to what the oracle generated (test_edge.sh SKIP_OUT_MATCH_HASH_TYPES).
-
-EDGE_SKIP_OUT_MATCH = {14000, 14100, 22000, 22001, 31500, 31600}
-
-# 1500 prints a recovered byte above 0x7f with its top bit cleared wherever that leaves it printable
-# (module_build_plain_postprocess). DES ignores that bit, so the printed password is another spelling
-# of the generated one with the same hash. Its outfile is checked through the module's own verify
-# rather than compared literally.
-
-# 36901 prints the diversified key rather than the five-byte candidate index.
-# 37400 truncates its last DES block, so another candidate can have the same full hash.
-# 17230 checks archive headers, which can match a different password.
-EDGE_VERIFY_OUT = {1500, 17230, 36901, 37400}
-
-# The modes whose -HH says same-salt is "Not" allowed but that the suite runs with a shared salt
-# anyway (test_edge.sh SKIP_SAME_SALT_HASH_TYPES, the active list).
-
-EDGE_SKIP_SAME_SALT = {6600, 8200, 13400, 15300, 15310, 15900, 15910, 16900, 18300, 18900,
-                       27000, 27100, 29700, 29930, 29940, 40018, 40019, 40042, 40043, 40044}
+EDGE_SKIP_MODES = modes_with_rule('edge', 'all', 'exclude')
 
 EDGE_HH_CACHE = {}
 
@@ -5185,12 +5152,12 @@ def edge_strip_userpw(data):
   return re.sub(rb"    \(user password[^\n]*", b"", data)
 
 
-def edge_out_verifies(mode, raw, hashes, tmp):
-  # The check for a mode in EDGE_VERIFY_OUT once the literal compare has failed. The outfile has to
+def edge_out_verifies(mode, raw, hashes, tmp, attack=0):
+  # The oracle-declared fallback after the literal compare fails. The outfile has to
   # hold one line for each expected hash, and the module's verify has to accept every line, which
   # is the run_verify fallback the crack path already takes.
 
-  if (mode in EDGE_VERIFY_OUT) == False:
+  if not has_rule(mode, "edge", attack, "verify_output"):
     return False
 
   lines = edge_strip_userpw(raw).rstrip(b"\n").split(b"\n")
@@ -5578,7 +5545,7 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
     if ctx.hexify_plain:
       word_compare = word.hex().encode("ascii")
 
-    if ctx.mode == 20510 and word_len <= 6 and len(word) == 0 and ctx.attack in (3, 6, 7, 12):
+    if has_rule(ctx.mode, "edge", ctx.attack, "exclude_empty") and word_len <= 6 and len(word) == 0:
       continue
 
     # A -a 4 grammar cannot write an empty word or one holding a tab (test_edge.sh
@@ -5626,7 +5593,7 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
 
       continue
 
-    if ctx.mode in EDGE_SKIP_OUT_MATCH or ctx.keep_guessing:
+    if has_rule(ctx.mode, "edge", ctx.attack, "skip_output") or ctx.keep_guessing:
       continue
 
     try:
@@ -5639,7 +5606,7 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
     want = edge_echo_norm(hash_out + b":" + (word_compare if word_compare is not None else word))
 
     if got != want:
-      if edge_out_verifies(ctx.mode, raw, [hash_out], tmp) == True:
+      if edge_out_verifies(ctx.mode, raw, [hash_out], tmp, ctx.attack) == True:
         continue
 
       errors += 1
@@ -5750,7 +5717,7 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
 
   cnt_max = hh["cnt_max"]
 
-  if mode == 20510 or ctx.binary:
+  if has_rule(mode, "edge", attack, "single_hash") or ctx.binary:
     cnt_max = 1
 
   # A mode that loads at most one hash has no multi run; nor does -a 9 on a mode where every hash is
@@ -5764,7 +5731,7 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
 
   same_salt = True
 
-  if mode not in EDGE_SKIP_SAME_SALT and hh["same_salt_not"]:
+  if not has_rule(mode, "edge", attack, "allow_same_salt") and hh["same_salt_not"]:
     same_salt = False
 
   if attack == 9:
@@ -5849,7 +5816,7 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
 
     return 1, 1, rc in (250, 252)
 
-  if mode in EDGE_SKIP_OUT_MATCH or ctx.keep_guessing:
+  if has_rule(mode, "edge", attack, "skip_output") or ctx.keep_guessing:
     return 0, 1, False
 
   try:
@@ -5862,7 +5829,7 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
   want = edge_sort_lines(b"".join(l + b"\n" for l in hcout))
 
   if got != want:
-    if edge_out_verifies(mode, raw, [dig for _, _, _, dig in selected], tmp) == True:
+    if edge_out_verifies(mode, raw, [dig for _, _, _, dig in selected], tmp, attack) == True:
       return 0, 1, False
 
     log_result(10)
@@ -5880,7 +5847,7 @@ def edge_process_mode(args, mode, cfg, tmp):
   # options ask for. Returns (errors, cells).
 
   if mode in EDGE_SKIP_MODES:
-    print("[ test.py edge ] !> error Type %d: mode has no edge cracking test" % mode)
+    print("[ test.py edge ] !> error Type %d: %s" % (mode, rules_for(mode, "edge", "all")["exclude"]))
 
     return 1, 0
 
@@ -5905,7 +5872,7 @@ def edge_process_mode(args, mode, cfg, tmp):
   for attack in cfg["attacks"]:
     # A MASK_ONLY_MODES mode ships an -a 3 kernel only, so every other attack has nothing to run.
 
-    if mode in MASK_ONLY_MODES and attack != 3:
+    if has_rule(mode, "edge", attack, "exclude"):
       continue
 
     kernel_types = hh["kernel_types"]
@@ -6564,6 +6531,8 @@ def main():
   ap = argparse.ArgumentParser(description="python manager for the hashcat -a 0 test path")
 
   ap.add_argument("-m", dest="mode", default="all", help="N | all | min-max")
+  ap.add_argument("--list-test-exclusions", nargs="?", const="markdown", choices=("markdown", "json"),
+                  help="list per-attack exclusions, verification rules and conditional filters without running tests")
   ap.add_argument("-a", dest="attack", default=None,
                   help="0 | 1 | 3 | 4 | 6 | 7 | 8 | 9 | 12 | all (--edge takes a comma list too)")
   ap.add_argument("-t", dest="target", default="all", choices=["single", "multi", "all"])
@@ -6638,6 +6607,12 @@ def main():
                   help=argparse.SUPPRESS)
 
   args = ap.parse_args()
+
+  if args.list_test_exclusions:
+    from test_policies import inventory, print_inventory
+    modes = None if args.mode == "all" else set(select_modes(args.mode, discover_modes()))
+    print_inventory(inventory(modes), args.list_test_exclusions)
+    return
 
   # --test-coverage reads the source tree only, so it runs before the isolation and binary checks.
   if args.test_coverage:
@@ -6859,27 +6834,32 @@ def main():
         continue
 
       file_only = is_file_only(mode)
-      pass_only = file_only or mode in NOCHECK_ENCODING
-
-      # PKZIP master key only has a single hash test; a forced multi run is skipped outright
-      # (test.sh).
+      pass_only = file_only
 
       mode_targets = targets
-
-      if mode == 20510:
-        if targets == ["multi"]:
-          report_skip(args, mode, "multi", widths[0], "mode supports only single-hash tests")
-
-          continue
-
-        mode_targets = ["single"]
 
       for width in widths:
         opts = base_opts(args) + ["--backend-vector-width", str(width)]
 
         r = Run(args, mode, pairs, width, opts, mode_targets, file_only, pass_only, tmp)
 
+        if args.attack != "all" and has_rule(mode, "ordinary", int(args.attack), "exclude"):
+          reason = rules_for(mode, "ordinary", int(args.attack))["exclude"]
+          for target in targets:
+            report_skip(args, mode, target, width, reason, int(args.attack))
+          continue
+
         for attack in attacks_for(args.attack, mode):
+          r.targets = mode_targets
+
+          if has_rule(mode, "ordinary", attack, "single_hash"):
+            if targets == ["multi"]:
+              reason = rules_for(mode, "ordinary", attack)["single_hash"]
+              report_skip(args, mode, "multi", width, reason, attack)
+              continue
+
+            r.targets = ["single"]
+
           if attack not in ATTACKS:
             missing.add(attack)
 

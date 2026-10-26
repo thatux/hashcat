@@ -28,6 +28,16 @@ def module_get_random_password(word):
   return hashlib.sha256(word).hexdigest().encode("ascii")
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'exclude': 'This hash mode is deprecated.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[64, 64], [0, 32], [-1, -1], [-1, -1], [-1, -1]]
 

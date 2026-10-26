@@ -13,6 +13,16 @@ from lib.test_helpers import pack_hex, split_hash_salt_word
 # the lower cased user name in UTF-16LE. MD4 is pycryptodome's, because hashlib often has none.
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'skip_output': 'The recovered representation differs from the oracle hash/password pair. Check the exit status only.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[32, 32], [0, 256], [-1, -1], [-1, -1], [-1, -1]]
 

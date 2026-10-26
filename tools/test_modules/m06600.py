@@ -17,6 +17,16 @@ def get_random_salt():
   return (random_bytes(8) + b"\x00" * 1008 + random_bytes(16)).hex()
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'allow_same_salt': 'The edge fixtures retain shared salts despite the mode capability flag.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[0, 256], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

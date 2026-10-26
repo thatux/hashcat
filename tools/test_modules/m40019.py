@@ -12,6 +12,16 @@ from lib.test_helpers import random_hex_string
 # GRUB 2: PBKDF2-HMAC-SHA512 with a 64 byte salt, all in hex.
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'allow_same_salt': 'The edge fixtures retain shared salts despite the mode capability flag.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[0, 256], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

@@ -31,6 +31,34 @@ def _crc32(x, c):
   return ((x >> 8) ^ _crc_table()[(x ^ c) & 0xff]) & 0xffffffff
 
 
+def module_test_constraints():
+  return {
+    'ordinary': {
+      'all': {'single_hash': 'The master-key fixture supports one hash per run.'},
+      12: {
+        'exclude': "The current hybrid mask fixture cannot express this mode's candidate layout.",
+      },
+    },
+    'edge': {
+      3: {
+        'exclude_empty': 'Removing the six-byte master-key prefix leaves no mask candidate.',
+      },
+      6: {
+        'exclude_empty': 'Removing the six-byte master-key prefix leaves no mask candidate.',
+      },
+      7: {
+        'exclude_empty': 'Removing the six-byte master-key prefix leaves no mask candidate.',
+      },
+      12: {
+        'exclude_empty': 'Removing the six-byte master-key prefix leaves no mask candidate.',
+      },
+      'all': {
+        'single_hash': 'The master-key fixture supports one hash per run.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[6, 250], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

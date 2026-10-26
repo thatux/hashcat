@@ -16,6 +16,21 @@
 # of the word.
 
 
+def module_test_constraints():
+  return {
+    'selftest': {
+      'all': {
+        'exclude': 'This mode has no published cracking self-test vector.',
+      },
+    },
+    'edge': {
+      'all': {
+        'exclude': 'STDOUT emits candidates and has no cracking kernel.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[1, 256], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

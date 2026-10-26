@@ -57,6 +57,16 @@ def skip32_encrypt(key, block):
   return bytes([(wr >> 8) & 0xff, wr & 0xff, (wl >> 8) & 0xff, wl & 0xff])
 
 
+def module_test_constraints():
+  return {
+    'ordinary': {
+      12: {
+        'exclude': "The current hybrid mask fixture cannot express this mode's candidate layout.",
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[-1, -1], [-1, -1], [10, 10], [8, 8], [-1, -1]]
 

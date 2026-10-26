@@ -44,6 +44,16 @@ def random_netntlmv1_salt(len_user, len_domain):
   return user + "::" + domain + ":" + c_challenge.hex() + s_challenge.hex()
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'allow_same_salt': 'The edge fixtures retain shared salts despite the mode capability flag.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[32, 32], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 

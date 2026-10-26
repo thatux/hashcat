@@ -34,6 +34,16 @@ A2E_UP = bytes.fromhex(
   "4445424643479c4854515253585556578c49cdcecbcfcce170dddedbdc8d8edf")
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'verify_output': 'A different valid plaintext can be recovered. Verify it with the oracle.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[9, 100], [1, 8], [-1, -1], [-1, -1], [-1, -1]]
 

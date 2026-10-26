@@ -47,6 +47,26 @@ it as `from lib import gpg`.
 * For a mode that drives its own cipher chaining, see [m20011.py](m20011.py) and
 [lib/diskcryptor.py](lib/diskcryptor.py)
 
+#### Test exclusions and verification rules ####
+
+Mode-specific exceptions belong in `module_test_constraints()`, which returns a literal dictionary. The manager and CI planner read it through Python's AST without importing the oracle or its optional dependencies. Each suite (`ordinary`, `edge` or `selftest`) contains attack numbers and their rules. An `all` entry supplies rules shared by every attack in that suite. Every rule needs a nonempty reason. Invalid declarations fail rather than silently removing coverage.
+
+```python
+def module_test_constraints():
+  return {
+    'ordinary': {
+      12: {'exclude': 'The hybrid mask fixture cannot express this candidate layout.'},
+    },
+    'edge': {
+      'all': {'verify_output': 'A different valid plaintext can be recovered.'},
+    },
+  }
+```
+
+`exclude` omits an unsupported combination from automatic selection. Explicitly requesting an excluded ordinary attack fails. `exclude_empty` omits an edge mask vector whose candidate disappeared after removing a format prefix. `single_hash` omits multi-target fixtures. `password_only`, `hash_only` and `skip_output` identify which output comparisons are omitted. `verify_output` verifies an alternative result with the oracle instead of accepting it unchecked. `allow_same_salt` records an intentional shared-salt fixture override. `whole_word` marks structured ordinary candidates that require whole-word attacks, and `mask_only` selects the mask kernel for a self-test.
+
+Generate the inventory with `python3 tools/test.py --list-test-exclusions`, or select one mode with `python3 tools/test.py -m 14000 --list-test-exclusions json`. The standalone equivalent is `python3 tools/test_policies.py --mode 14000 --format json`. It includes declarations, unavailable kernel families and shared conditional filters. Conditional rows describe when a fixture is omitted, not proof that it was omitted in a particular run. These are test-selection and verification rules, not permission to ignore runtime errors: memory refusals, timeouts, failed oracles and zero-result runs remain failures.
+
 #### Reproducible runs ####
 
 `HCTEST_SEED` is worth knowing about. Set it, and a run repeats: the same salts, the same passwords,

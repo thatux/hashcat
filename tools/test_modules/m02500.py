@@ -22,6 +22,16 @@ from lib.test_helpers import random_number, random_bytes
 # parses it back and re-derives, which is what the python runner's round trip check needs.
 
 
+def module_test_constraints():
+  return {
+    'edge': {
+      'all': {
+        'exclude': 'This hash mode is deprecated.',
+      },
+    },
+  }
+
+
 def module_constraints():
   return [[8, 63], [0, 32], [-1, -1], [-1, -1], [-1, -1]]
 
