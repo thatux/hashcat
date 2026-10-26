@@ -266,6 +266,8 @@ jobs:
           TEST_TARGET: ${{ inputs.target }}
           TEST_VECTOR_WIDTH: ${{ inputs.vector_width }}
         run: |
+          set -o pipefail
+
           # A shared-code change with no mode of its own runs test.py -M's 24
           # representative modes, sharded by ci_matrix.py into per-mode lists that
           # take the normal path below (test.py now handles the container families).
@@ -299,11 +301,21 @@ jobs:
 
           fail=0
           failed_modes=""
+          trace_edge=false
 
           if [ "$EVENT" = "workflow_dispatch" ] && [ "$KIND" != "bridge" ] && [ "$KIND" != "container" ]; then
             if [ -n "$TEST_ATTACK" ]; then OPTS="$OPTS -a $TEST_ATTACK"; fi
             if [ -n "$TEST_TARGET" ]; then OPTS="$OPTS -t $TEST_TARGET"; fi
             if [ -n "$TEST_VECTOR_WIDTH" ]; then OPTS="$OPTS -V $TEST_VECTOR_WIDTH"; fi
+            if [ "$KIND" = "edge" ] && [ -n "$TEST_ATTACK" ]; then
+              trace_edge=true
+              export TESTPY_TRACE_CELLS=1
+            fi
+          fi
+
+          if [ "$KIND" = "edge" ] && [ "$MODES" = "21800" ]; then
+            trace_edge=true
+            export TESTPY_TRACE_CELLS=1
           fi
 
           for mode in $MODES; do
@@ -325,13 +337,20 @@ jobs:
             # summary below. bash -e does not abort on a command that is an if condition, so the
             # loop still runs every mode.
             # shellcheck disable=SC2086
-            if python3 tools/test.py -m "${mode}" ${OPTS} ${tuning} -D 1 -f > "${log}" 2>&1; then
+            if [ "$trace_edge" = true ]; then
+              if timeout --signal=TERM --kill-after=30s 30m \
+                python3 -u tools/test.py -m "${mode}" ${OPTS} ${tuning} -D 1 -f 2>&1 | tee "${log}"; then
+                rc=0
+              else
+                rc=$?
+              fi
+            elif python3 tools/test.py -m "${mode}" ${OPTS} ${tuning} -D 1 -f > "${log}" 2>&1; then
               rc=0
             else
               rc=$?
             fi
 
-            cat "${log}"
+            if [ "$trace_edge" = false ]; then cat "${log}"; fi
             echo "::endgroup::"
 
             if [ "${rc}" -ne 0 ]; then

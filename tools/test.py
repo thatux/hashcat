@@ -5099,6 +5099,11 @@ def edge_as_bytes(x):
   return os.fsencode(x)
 
 
+def edge_trace(message):
+  if os.environ.get("TESTPY_TRACE_CELLS"):
+    print("[ test.py edge ] > %s" % message, flush=True)
+
+
 def edge_run(opts, mode, target, stdin_bytes, attack, extra):
   # Like run_hashcat, but every argument is bytes, because an edge hash, salt or mask can carry a
   # byte that is not valid ASCII and subprocess will not mix str and bytes in one argv.
@@ -5577,7 +5582,11 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
     except OSError:
       pass
 
+    edge_trace("start Type %d, Attack %d, Kernel %s, Vector %d, Test %d, single"
+               % (ctx.mode, ctx.attack, ctx.ktype, width, i))
     rc, _ = edge_run(opts, ctx.mode, target, stdin, ctx.attack, extra)
+    edge_trace("end Type %d, Attack %d, Kernel %s, Vector %d, Test %d, single, rc=%d"
+               % (ctx.mode, ctx.attack, ctx.ktype, width, i, rc))
 
     cells += 1
 
@@ -5806,7 +5815,11 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
   except OSError:
     pass
 
+  edge_trace("start Type %d, Attack %d, Kernel %s, Vector %d, multi"
+             % (mode, attack, ctx.ktype, width))
   rc, _ = edge_run(opts, mode, hash_in, stdin, attack, extra)
+  edge_trace("end Type %d, Attack %d, Kernel %s, Vector %d, multi, rc=%d"
+             % (mode, attack, ctx.ktype, width, rc))
 
   if rc != 0:
     log_result(rc)
@@ -5912,7 +5925,11 @@ def edge_process_mode(args, mode, cfg, tmp):
           if attack not in EDGE_WHOLE_WORD and cfg["all_scope"] and mode != 400:
             continue
 
+      edge_trace("start oracle Type %d, Attack %d, Kernel %s"
+                 % (mode, attack, ktype))
       vectors, oracle_rc = edge_oracle(mode, attack, optimized)
+      edge_trace("end oracle Type %d, Attack %d, Kernel %s, rc=%d, vectors=%d"
+                 % (mode, attack, ktype, oracle_rc, len(vectors)))
 
       if oracle_rc != 0:
         print("[ test.py edge ] !> error Type %d: oracle failed (rc=%d)" % (mode, oracle_rc))

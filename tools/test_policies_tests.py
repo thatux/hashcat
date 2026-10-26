@@ -5,6 +5,9 @@
 ## License.....: MIT
 ##
 
+# Check policy parsing, rule isolation and focused CI selection. The test.yml planning job runs
+# this standalone test entry point before generating its matrix.
+
 import json
 import subprocess
 import sys

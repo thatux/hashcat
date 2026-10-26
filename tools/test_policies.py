@@ -5,6 +5,9 @@
 ## License.....: MIT
 ##
 
+# Read oracle test rules without importing their crypto dependencies and generate the inventory.
+# test.py, ci_matrix.py and test_policies_tests.py depend on this module.
+
 import argparse
 import ast
 import functools
