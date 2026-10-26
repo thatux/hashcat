@@ -1914,7 +1914,13 @@ def output_has_crack(mode, out, word, digest, pass_only, tmp):
   crack_lines = [line.rstrip(b"\r").rsplit(b"\r", 1)[-1] for line in out.split(b"\n") if prefix in line]
 
   if not crack_lines:
-    return False
+    # A module can identify equivalent hash encodings that hashcat deduplicates.
+    suffixes = (b":" + word, b":$HEX[" + word.hex().encode("ascii") + b"]")
+    crack_lines = [line.rstrip(b"\r").rsplit(b"\r", 1)[-1] for line in out.split(b"\n")
+                   if line.rstrip(b"\r").endswith(suffixes)]
+
+    if not crack_lines:
+      return False
 
   return run_verify(mode, digest, crack_lines, tmp)
 

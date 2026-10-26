@@ -34,6 +34,8 @@ A module may also define `module_get_random_password`, which takes the generated
 returns the one the mode actually needs. That is for a mode whose candidate is a seed phrase, a
 challenge response or anything else with a shape of its own rather than a free string.
 
+A module may define `module_hash_identity(hash_str)` when different encodings represent the same hash and hashcat deduplicates them. It returns a hashable value containing the complete effective digest and salt. Verification accepts another encoding only after `module_verify_hash` validates its recovered password and its identity matches a requested hash. For example, `m00501.py` decrypts the wrapping IV and ciphertext to identify the underlying md5crypt value.
+
 Where a family of modes shares a body, it lives in `lib` beside the helpers, and a module reaches
 it as `from lib import gpg`.
 

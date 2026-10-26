@@ -764,6 +764,9 @@ def verify(mod, hashes_file, cracks_file, out_file):
   with open(hashes_file, "rb") as handle:
     hashlist = set(line.rstrip(b"\r\n") for line in handle)
 
+  identity = getattr(mod, "module_hash_identity", None)
+  identities = {identity(h.decode("utf-8")) for h in hashlist} if identity else set()
+
   with open(cracks_file, "rb") as handle, open(out_file, "wb") as out:
     for raw in handle:
       raw = raw.rstrip(b"\r\n")
@@ -787,7 +790,8 @@ def verify(mod, hashes_file, cracks_file, out_file):
       # possible if the hash is in the cracks file but not in the hash file
 
       if digest.encode("utf-8") not in hashlist:
-        continue
+        if identity is None or identity(digest) not in identities:
+          continue
 
       out.write(raw + b"\n")
 
