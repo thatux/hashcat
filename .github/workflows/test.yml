@@ -248,6 +248,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           MODES: ${{ matrix.modes }}
           KIND: ${{ matrix.kind }}
+          VECTOR_WIDTH: ${{ matrix.vector_width }}
         run: |
           # A shared-code change with no mode of its own runs test.py -M's 24
           # representative modes, sharded by ci_matrix.py into per-mode lists that
@@ -270,9 +271,14 @@ jobs:
             OPTS=""
           elif [ "$KIND" = "edge" ]; then
             OPTS="--edge"
+            if [ -n "$VECTOR_WIDTH" ]; then
+              OPTS="$OPTS -V $VECTOR_WIDTH"
+            fi
           else
             OPTS="-a all -t all"
           fi
+
+          set -o pipefail
 
           fail=0
           failed_modes=""
@@ -285,13 +291,12 @@ jobs:
             # summary below. bash -e does not abort on a command that is an if condition, so the
             # loop still runs every mode.
             # shellcheck disable=SC2086
-            if python3 tools/test.py -m "${mode}" ${OPTS} -D 1 -f > "${log}" 2>&1; then
+            if python3 -u tools/test.py -m "${mode}" ${OPTS} -D 1 -f 2>&1 | tee "${log}"; then
               rc=0
             else
               rc=$?
             fi
 
-            cat "${log}"
             echo "::endgroup::"
 
             if [ "${rc}" -ne 0 ]; then
@@ -326,7 +331,7 @@ jobs:
           exit $fail
 
       - name: Upload the test logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: test-logs-${{ matrix.name }}

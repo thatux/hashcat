@@ -142,6 +142,23 @@ def test_matrix(groups, kinds):
             for i, group in enumerate(groups)]
 
 
+def edge_matrix(modes):
+    # Split long yescrypt runs by vector width without increasing the weekly job budget.
+    widths = (1, 2, 4, 8, 16)
+    split = set(modes) & {36100, 36200}
+    ordinary = set(modes) - split
+    remaining = SHARDS["edge"] - len(split) * len(widths)
+    matrix = test_matrix(balance_shards(ordinary, remaining), ["edge"])
+
+    for mode in sorted(split):
+        for width in widths:
+            matrix.append({"name": "edge-%d-v%d" % (mode, width),
+                           "shard": len(matrix), "kind": "edge", "modes": str(mode),
+                           "vector_width": width})
+
+    return matrix
+
+
 def test_modes(option):
     # Ask test.py for mode lists that cannot be inferred from the files on disk.
     out = subprocess.run([sys.executable, "tools/test.py", option],
@@ -303,7 +320,7 @@ def main():
             matrix = test_matrix(balance_shards(pool, SHARDS["test"]), kernel_kinds)
 
             if want_edge:
-                matrix += test_matrix(balance_shards(pool, SHARDS["edge"]), ["edge"])
+                matrix += edge_matrix(pool)
 
             if want_container:
                 matrix += container_matrix(balance_shards(cpool, SHARDS["container"]))
@@ -328,7 +345,7 @@ def main():
             matrix = test_matrix(balance_shards(asked_kernel, SHARDS["test"]), kernel_kinds)
 
             if want_edge:
-                matrix += test_matrix(balance_shards(asked_kernel, SHARDS["edge"]), ["edge"])
+                matrix += edge_matrix(asked_kernel)
 
             if asked_cont:
                 matrix += container_matrix(balance_shards(asked_cont, SHARDS["container"]))

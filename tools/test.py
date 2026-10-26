@@ -5916,6 +5916,13 @@ def edge_process_mode(args, mode, cfg, tmp):
                     pt_hex, pt_base58, hexify_plain, no_salt, keep_guess)
 
       for width in cfg["widths"]:
+        started = time.monotonic()
+        previous_cells = cells
+        previous_errors = errors
+
+        print("[ test.py edge ] > Type %d, Attack %d, Kernel %s, Vector %d: starting"
+              % (mode, attack, ktype, width), flush=True)
+
         outfile = os.path.join(tmp, "edge_%d_%s_%d_%d.outfile" % (mode, ktype, attack, width))
         opts    = edge_opts(args, optimized, width, pt_hex, outfile)
 
@@ -5931,8 +5938,12 @@ def edge_process_mode(args, mode, cfg, tmp):
           errors += e
           cells  += c
 
-          if stop:
-            break
+        print("[ test.py edge ] > Type %d, Attack %d, Kernel %s, Vector %d: %d cells, %d errors, %.1fs"
+              % (mode, attack, ktype, width, cells - previous_cells, errors - previous_errors,
+                 time.monotonic() - started), flush=True)
+
+        if 1 in cfg["targets"] and stop:
+          break
 
   return errors, cells
 
