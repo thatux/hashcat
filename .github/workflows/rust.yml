@@ -31,7 +31,7 @@ jobs:
   # Basic actions that must pass before we kick off more expensive tests.
   basics:
     name: basic checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs:
       - fmt
       - cargo-check
@@ -41,7 +41,7 @@ jobs:
   # enforce standard Rust formating (rustfmt)
   fmt:
     name: rustfmt check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust ${{ env.rust_stable }}
@@ -62,7 +62,7 @@ jobs:
     name: cargo check
     needs:
       - define-matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         crate: ${{ fromJSON(needs.define-matrix.outputs.crates) }}
@@ -78,7 +78,7 @@ jobs:
 
   define-matrix:
     name: get crates to test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       crates: ${{ steps.crates.outputs.crates }}
     steps:
@@ -99,7 +99,7 @@ jobs:
     strategy:
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-26.04
           - macos-latest
           - windows-latest
         crate: ${{ fromJSON(needs.define-matrix.outputs.crates) }}
