@@ -28,7 +28,7 @@
 
 DEBUG                   := 0
 PRODUCTION              := 0
-PRODUCTION_VERSION      := v7.1.2
+PRODUCTION_VERSION      := v8.0.0
 MACOS_UNIVERSAL_BINARY  ?= 0
 ENABLE_LTO              ?= 0
 ENABLE_CUBIN            ?= 1
@@ -188,9 +188,9 @@ endif
 ## Do not modify
 ##
 
-MODULE_INTERFACE_VERSION := 720
-BRIDGE_INTERFACE_VERSION := 720
-FEEDS_INTERFACE_VERSION  := 720
+MODULE_INTERFACE_VERSION := 810
+BRIDGE_INTERFACE_VERSION := 800
+FEEDS_INTERFACE_VERSION  := 800
 
 ##
 ## Toolchains
@@ -614,7 +614,7 @@ CFLAGS                  += -fsanitize=$(SANITIZE) -fno-omit-frame-pointer
 # UBSAN_OPTIONS=halt_on_error=1 when that is what you actually want.
 # The sanitizer must reach the link too, otherwise every target that links the
 # C++ deps (deps/unrar) fails with undefined __asan_* references. CFLAGS is not
-# enough for the shared-library layout: libhashcat.so.7, the module plugins and
+# enough for the shared-library layout: libhashcat.so.8, the module plugins and
 # the feed plugins are all separate link steps.
 LFLAGS                  += -fsanitize=$(SANITIZE)
 endif
@@ -1130,6 +1130,13 @@ $(foreach P,$(PLATFORMS),$(eval CFLAGS_PLUGIN_$(P) := $(filter-out $(CFLAGS_HOST
 
 $(foreach P,$(PLATFORMS),$(eval CFLAGS_PLUGIN_$(P) += -fvisibility=hidden))
 
+# A hook is private to the module that defines it, so the compiler reports one that is defined and
+# never registered. Nothing declares a hook ahead of its definition any more, which leaves the
+# assignment in module_init () as the only place its signature is checked, so that has to fail the
+# build rather than warn.
+
+$(foreach P,$(PLATFORMS),$(eval CFLAGS_PLUGIN_$(P) += -Werror=incompatible-pointer-types))
+
 ##
 ## Flags a vendored dependency needs, per platform
 ##
@@ -1249,14 +1256,14 @@ EMU_OBJS_ALL            += emu_inc_rp_common emu_inc_rp emu_inc_rp_optimized
 EMU_OBJS_ALL            += emu_inc_hash_md4 emu_inc_hash_md5 emu_inc_hash_ripemd160 emu_inc_hash_sha1 emu_inc_hash_sha256 emu_inc_hash_sha384 emu_inc_hash_sha512 emu_inc_hash_streebog256 emu_inc_hash_streebog512 emu_inc_ecc_secp256k1 emu_inc_bignum_2048
 EMU_OBJS_ALL            += emu_inc_hash_blake2b emu_inc_hash_blake2s emu_inc_hash_sm3 emu_inc_hash_whirlpool emu_inc_hash_sha3 emu_inc_hash_gost94 emu_inc_hash_ripemd320 emu_inc_hash_mysql323 emu_inc_hash_haval emu_inc_hash_tiger emu_inc_hash_ripemd128 emu_inc_hash_ripemd256 emu_inc_hash_md2 emu_inc_hash_sha0 emu_inc_hash_snefru emu_inc_hash_skein512 emu_inc_hash_panama emu_inc_hash_lm emu_inc_hash_mdc2
 EMU_OBJS_ALL            += emu_inc_hash_blake emu_inc_hash_bmw emu_inc_hash_cubehash emu_inc_hash_echo emu_inc_hash_fugue emu_inc_hash_groestl emu_inc_hash_hamsi emu_inc_hash_jh emu_inc_hash_luffa emu_inc_hash_shabal emu_inc_hash_shavite emu_inc_hash_simd
-EMU_OBJS_ALL            += emu_inc_hash_has160 emu_inc_hash_edonr emu_inc_hash_md6 emu_inc_hash_radiogatun emu_inc_hash_ripemd emu_inc_hash_whirlpool01
+EMU_OBJS_ALL            += emu_inc_hash_has160 emu_inc_hash_edonr emu_inc_hash_md6 emu_inc_hash_radiogatun emu_inc_hash_ripemd emu_inc_hash_whirlpool01 emu_inc_hash_xxhash
 EMU_OBJS_ALL            += emu_inc_cipher_aes emu_inc_cipher_camellia emu_inc_cipher_des emu_inc_cipher_kuznyechik emu_inc_cipher_serpent emu_inc_cipher_twofish
 EMU_OBJS_ALL            += emu_inc_hash_base58
 
 # the escape's walk over the packed pool, so the host reports what the device matched from one source
 EMU_OBJS_ALL            += emu_inc_pcfg emu_inc_pcfg_omen
 
-OBJS_ALL                := affinity autotune backend benchmark bitmap bitops bridges combinator common convert cpt cpu_crc32 cpu_features debugfile dispatch dynamicx dynloader event ext_ADL ext_cuda ext_hip ext_nvml ext_nvrtc ext_hiprtc ext_OpenCL ext_openssl ext_sysfs_amdgpu ext_sysfs_intelgpu ext_sysfs_cpu ext_iconv ext_lzma ext_zlib ext_zstd feed filehandling folder hashcat hashes hlfmt hwmon induct interface json keyboard_layout locking logfile loopback memchr memory module_options module_options_cache module_options_value monitor mpsp outfile_check outfile parser path paw64 pidfile plugin_abi potfile pubkey pwpipe recipe restore rp rp_cpu selftest slow_candidates shared status stdout straight generic system terminal thread timer tuningdb usage user_options user_options_table wordlist $(EMU_OBJS_ALL)
+OBJS_ALL                := affinity autotune backend benchmark bitmap bitops bridges combinator common convert cpt cpu_crc32 cpu_features debugfile dispatch dynamicx dynloader event ext_ADL ext_cuda ext_hip ext_nvml ext_nvrtc ext_hiprtc ext_OpenCL ext_openssl ext_sysfs_amdgpu ext_sysfs_intelgpu ext_sysfs_cpu ext_iconv ext_lzma ext_zlib ext_zstd feed filehandling folder hashcat hashes hlfmt hwmon induct interface json keyboard_layout locking logfile loopback memchr memory module_options module_options_cache module_options_value monitor mpsp outfile_check outfile parser path paw64 pidfile plugin_abi potfile pubkey pwpipe recipe restore rp rp_cpu selftest slow_candidates shared status status_rc stdout straight generic system terminal thread timer tuningdb usage user_options user_options_table wordlist $(EMU_OBJS_ALL)
 
 ifeq ($(ENABLE_BRAIN),1)
 OBJS_ALL                += brain
@@ -1871,6 +1878,15 @@ install_docs: install_make_shared_root
 install_shared: install_make_shared_root
 	$(INSTALL) -m 755 -d                                                    $(DESTDIR)$(SHARED_FOLDER)
 	$(INSTALL) -m 644 hashcat.hcstat2                                       $(DESTDIR)$(SHARED_FOLDER)/
+	$(INSTALL) -m 755 -d                                                    $(DESTDIR)$(SHARED_FOLDER)/extra/fpga
+	$(INSTALL) -m 644 extra/fpga/99-digilent.rules                          $(DESTDIR)$(SHARED_FOLDER)/extra/fpga/
+	$(INSTALL) -m 644 extra/fpga/99-litepcie.rules                          $(DESTDIR)$(SHARED_FOLDER)/extra/fpga/
+	$(INSTALL) -m 644 extra/fpga/99-ztex.rules                              $(DESTDIR)$(SHARED_FOLDER)/extra/fpga/
+	$(INSTALL) -m 755 -d                                                    $(DESTDIR)$(SHARED_FOLDER)/extra/fpga/zc706-sdboot
+	$(INSTALL) -m 644 extra/fpga/zc706-sdboot/README.md                     $(DESTDIR)$(SHARED_FOLDER)/extra/fpga/zc706-sdboot/
+	$(INSTALL) -m 644 extra/fpga/zc706-sdboot/build_fsbl.tcl                $(DESTDIR)$(SHARED_FOLDER)/extra/fpga/zc706-sdboot/
+	$(INSTALL) -m 644 extra/fpga/zc706-sdboot/fsbl.elf                      $(DESTDIR)$(SHARED_FOLDER)/extra/fpga/zc706-sdboot/
+	$(INSTALL) -m 755 extra/fpga/zc706-sdboot/make_bootbin.py               $(DESTDIR)$(SHARED_FOLDER)/extra/fpga/zc706-sdboot/
 
 .PHONY: install_tunings
 install_tunings: install_shared

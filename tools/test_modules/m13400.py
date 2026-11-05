@@ -9,9 +9,27 @@ import hashlib
 
 from Crypto.Cipher import AES
 
-from lib.test_helpers import random_bytes, random_number
+from lib.test_helpers import random_bytes, random_number, test_iteration_parameters
 
-# KeePass 1 and 2: the password (and optional keyfile) is hashed to a 32 byte key, transformed
+
+def module_test_properties():
+  return {
+    'constraints': {
+      'pure': {
+        'password_length': [0, 256],
+        'salt_length': None,
+      },
+      'optimized': None,
+      'combined_length': None,
+    },
+    'reduced': {
+      'parameters': {'iterations': 2},
+    },
+  }
+
+
+# KeePass 1 and 2: the password (and the optional keyfile and Windows user account key) is hashed
+# to a 32 byte key, transformed
 # through many rounds of AES-256-ECB under a random seed, hashed once more and combined with the
 # final seed. Version 1 then encrypts the contents with AES or Twofish in CBC; version 2 decrypts a
 # stored block to recover the expected bytes. Twofish has no stdlib or PyPI binding that runs on
@@ -32,6 +50,9 @@ _Q1_T = [
   [0x4, 0xC, 0x7, 0x5, 0x1, 0x6, 0x9, 0xA, 0x0, 0xE, 0xD, 0x8, 0x2, 0xB, 0x3, 0xF],
   [0xB, 0x9, 0x5, 0x1, 0xC, 0x3, 0xD, 0xE, 0x6, 0x4, 0x7, 0xF, 0x2, 0x0, 0x8, 0xA],
 ]
+
+
+ITERATION_PARAMETERS = test_iteration_parameters(module_test_properties())
 
 
 def _ror4(x, n):
@@ -257,10 +278,6 @@ def _cbc_decrypt(dec_block, iv, data, unpad):
 
 # --- KeePass ---
 
-def module_constraints():
-  return [[0, 256], [-1, -1], [-1, -1], [-1, -1], [-1, -1]]
-
-
 def _split_star(s):
   # perl split ('\*', s) drops trailing empty fields
 
@@ -295,10 +312,19 @@ def get_random_keepass_salt():
   contents = contents.hex()
 
   is_keyfile = random_number(0, 1)
+  is_userkey = random_number(0, 1)
   keyfile_attributes = ""
 
   if is_keyfile == 1:
     keyfile_attributes = keyfile_attributes + "1*64*" + random_bytes(32).hex()
+
+  # the Windows user account key is a KeePass 2 key provider, so a kdb never carries one
+
+  if (version == 2) and (is_userkey == 1):
+    if len(keyfile_attributes) > 0:
+      keyfile_attributes = keyfile_attributes + "*"
+
+    keyfile_attributes = keyfile_attributes + "2*128*" + random_bytes(64).hex()
 
   if version == 1:
     return "*".join([str(version), str(iteration), str(algorithm), final_random_seed,
@@ -311,14 +337,14 @@ def get_random_keepass_salt():
                    transf_random_seed, enc_iv, contents_hash, contents, keyfile_attributes])
 
 
-def module_generate_hash(word, salt, param=None):
+def module_generate_hash(word, salt, param=None, iterations=None):
   if len(salt) == 0:
     salt = get_random_keepass_salt()
 
   salt_arr = _split_star(salt)
 
   version = int(salt_arr[0])
-  iteration = int(salt_arr[1])
+  iteration = int(salt_arr[1]) if iterations is None else int(iterations)
   algorithm = int(salt_arr[2])
 
   final_random_seed = bytes.fromhex(salt_arr[3])
@@ -344,14 +370,27 @@ def module_generate_hash(word, salt, param=None):
 
       intermediate_hash = hashlib.sha256(intermediate_hash + bytes.fromhex(keyfile_content)).digest()
   else:
-    if len(salt_arr) == 11:
-      inline_keyfile_flag = salt_arr[8]
-      keyfile_len = salt_arr[9]
-      keyfile_content = salt_arr[10]
+    # the optional parts follow the contents hash, each one a marker, a length and its data: 1 for
+    # a keyfile and 2 for a Windows user account key. Both can be present, so the marker tells them
+    # apart rather than the field count.
+
+    idx = 8
+
+    if (len(salt_arr) > idx) and (salt_arr[idx] == "1"):
+      keyfile_content = salt_arr[idx + 2]
 
       intermediate_hash = intermediate_hash + bytes.fromhex(keyfile_content)
 
-      keyfile_attributes = "*" + inline_keyfile_flag + "*" + keyfile_len + "*" + keyfile_content
+      keyfile_attributes = keyfile_attributes + "*1*" + salt_arr[idx + 1] + "*" + keyfile_content
+
+      idx += 3
+
+    if (len(salt_arr) > idx) and (salt_arr[idx] == "2"):
+      userkey_content = salt_arr[idx + 2]
+
+      intermediate_hash = intermediate_hash + bytes.fromhex(userkey_content)
+
+      keyfile_attributes = keyfile_attributes + "*2*" + salt_arr[idx + 1] + "*" + userkey_content
 
     intermediate_hash = hashlib.sha256(intermediate_hash).digest()
 
@@ -414,7 +453,7 @@ def module_verify_hash(line):
 
   data = hash_in.split("*")
 
-  if len(data) not in (9, 11, 12, 14):
+  if len(data) not in (9, 11, 12, 14, 15):
     return None
 
   if data[0] != "$keepass$":

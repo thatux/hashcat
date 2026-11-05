@@ -9,14 +9,26 @@ import hashlib
 
 from lib.test_helpers import kernel_charset, split_hash_word, utf16le
 
-# MSSQL (2005): the password in UTF-16LE, then the 4 byte salt. The two kernel families convert the
-# password to UTF-16 differently, see kernel_charset ().
+# MSSQL (2005, 2008): the password in UTF-16LE, then the 4 byte salt. The two kernel families
+# convert the password to UTF-16 differently, see kernel_charset ().
 
 CHARSET = kernel_charset()
 
 
-def module_constraints():
-  return [[0, 256], [8, 8], [0, 27], [8, 8], [8, 27]]
+def module_test_properties():
+  return {
+    'constraints': {
+      'pure': {
+        'password_length': [0, 256],
+        'salt_length': [8, 8],
+      },
+      'optimized': {
+        'password_length': [0, 27],
+        'salt_length': [8, 8],
+      },
+      'combined_length': [8, 27],
+    },
+  }
 
 
 def module_generate_hash(word, salt, iterations=None):

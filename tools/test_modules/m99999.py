@@ -8,8 +8,9 @@
 from lib.test_helpers import split_hash_word
 
 # Plaintext (mode 99999): the hash string is the plaintext itself, so the oracle is the identity
-# function. module_hash_decode stores the line verbatim and derives an MD4 digest from it, one block,
-# which caps the length at 55. The compare harness' "invalid input" check cannot be met here and is
+# function. module_hash_decode stores the line verbatim and derives an MD4 digest from it. The pure
+# kernels hash the full password up to 256 bytes; the optimized (-O) kernels are single-block and cap
+# the length at 55. The compare harness' "invalid input" check cannot be met here and is
 # not meant to be: with the hash equal to the plaintext there is no such thing as an invalid hash,
 # so both engines accept the same lines. The perl oracle behaves identically.
 #
@@ -18,8 +19,20 @@ from lib.test_helpers import split_hash_word
 # runner's non_ascii_supported () pin the generated password to ASCII.
 
 
-def module_constraints():
-  return [[1, 55], [-1, -1], [1, 55], [-1, -1], [-1, -1]]
+def module_test_properties():
+  return {
+    'constraints': {
+      'pure': {
+        'password_length': [1, 256],
+        'salt_length': None,
+      },
+      'optimized': {
+        'password_length': [1, 55],
+        'salt_length': None,
+      },
+      'combined_length': None,
+    },
+  }
 
 
 def module_get_random_password(word):

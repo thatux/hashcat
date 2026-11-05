@@ -24,6 +24,7 @@
 #define PWS_POS             kernel_param->pws_pos
 #define GID_CNT             kernel_param->gid_max
 #define PCFG_LANE_STRIDE    kernel_param->pcfg_lane_stride
+#define MODULE_TUNE         kernel_param->module_tune
 #else
 #define BITMAP_MASK         kernel_param->bitmap_mask
 #define PCFG_POOL_AT1       kernel_param->pcfg_pool_at1
@@ -42,6 +43,7 @@
 #define PWS_POS             kernel_param->pws_pos
 #define GID_CNT             kernel_param->gid_max
 #define PCFG_LANE_STRIDE    kernel_param->pcfg_lane_stride
+#define MODULE_TUNE         kernel_param->module_tune
 #endif
 
 #ifdef IS_CUDA
@@ -1972,6 +1974,26 @@ typedef enum sm3_constants
 
 } sm3_constants_t;
 
+typedef enum xxh64_constants
+{
+  XXH64_PRIME_1=0x9e3779b185ebca87UL,
+  XXH64_PRIME_2=0xc2b2ae3d27d4eb4fUL,
+  XXH64_PRIME_3=0x165667b19e3779f9UL,
+  XXH64_PRIME_4=0x85ebca77c2b2ae63UL,
+  XXH64_PRIME_5=0x27d4eb2f165667c5UL
+
+} xxh64_constants_t;
+
+typedef enum xxh32_constants
+{
+  XXH32_PRIME_1=0x9e3779b1U,
+  XXH32_PRIME_2=0x85ebca77U,
+  XXH32_PRIME_3=0xc2b2ae3dU,
+  XXH32_PRIME_4=0x27d4eb2fU,
+  XXH32_PRIME_5=0x165667b1U
+
+} xxh32_constants_t;
+
 typedef enum combinator_mode
 {
   COMBINATOR_MODE_BASE_LEFT   = 10001,
@@ -2103,6 +2125,11 @@ typedef struct kernel_param
   u32 pcfg_pool_at2;        // 41
   u32 pcfg_pool_at3;        // 42
 
+  // The way to run the kernels that autotune picked for this device out of module_tune_variants (),
+  // read at run time so that one build serves them all. Zero for a module without that hook.
+
+  u32 module_tune;          // 43
+
 } kernel_param_t;
 
 typedef struct salt
@@ -2114,6 +2141,7 @@ typedef struct salt
   u32 salt_len_pc;
   u32 salt_iter;
   u32 salt_iter2;
+  u32 salt_iter3;
   u32 salt_dimy;
   u32 salt_sign[2];
   u32 salt_repeats;

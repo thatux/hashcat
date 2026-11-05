@@ -35,6 +35,9 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import test_iterations
+
+
 # On Windows hashcat writes CRLF to a text mode stdout, and every parser below matches LF terminated
 # lines, so CRLF is folded to LF in whatever a run captures.
 if os.name == "nt":
@@ -246,7 +249,7 @@ def preserve_inputs(cmd, stdin_bytes=None):
 
   def is_scratch_file(a):
     try:
-      return os.path.isfile(a) and os.path.realpath(a).startswith(tmp_root)
+      return os.path.isfile(a) and os.path.realpath(os.fsdecode(a)).startswith(tmp_root)
     except (TypeError, ValueError):
       return False
 
@@ -777,11 +780,28 @@ def require_device_type(device, ids):
       % (device, "/".join(sorted(have))))
 
 
-def discover_modes():
+# Modes that need hardware to run at all. Without HCFPGA_TEST=1 they are left out of every run, so a
+# machine without an FPGA does not report them as a fault.
+HARDWARE_MODES = {75000}
+
+
+def hardware_ok():
+  return os.environ.get("HCFPGA_TEST") == "1"
+
+
+def hardware_refuse(ht):
+  if ht in HARDWARE_MODES and hardware_ok() == False:
+    die("! hash type %d needs an FPGA board. Attach one and set HCFPGA_TEST=1 to test it." % ht)
+
+
+def discover_modes(with_hardware=False):
   out = []
 
   for path in glob.glob(os.path.join(TDIR, "test_modules", "m[0-9][0-9][0-9][0-9][0-9].py")):
     out.append(int(re.search(r"m0*([0-9]+)\.py$", path).group(1)))
+
+  if with_hardware == False and hardware_ok() == False:
+    out = [m for m in out if m not in HARDWARE_MODES]
 
   return sorted(set(out))
 
@@ -802,6 +822,8 @@ def select_modes(spec, modes):
 
   if re.fullmatch(r"[0-9]+", spec):
     ht = int(spec)
+
+    hardware_refuse(ht)
 
     if ht not in modes:
       die("! hash type %d has no tools/test_modules/m%05d.py, so test.py cannot run it\n"
@@ -986,11 +1008,37 @@ def has_multi_hash(mode):
   return edge_hh(mode)["cnt_max"] == 1
 
 
+ITERATION_REPORTED = set()
+
+
+def report_iterations(mode, full_reason=None):
+  # When reduced testing is requested, print once per slow mode whether it applies and why not.
+  if not test_iterations.iteration_reduction_requested() or mode in ITERATION_REPORTED or not is_slow(mode):
+    return
+
+  ITERATION_REPORTED.add(mode)
+  kwargs = test_iterations.reduced_iteration_parameters(mode) if full_reason is None else {}
+
+  if full_reason is None and test_iterations.iteration_reduction_enabled(mode):
+    detail = ", ".join("%s=%d" % item for item in kwargs.items())
+
+    print("[ test.py ] [ Type %d ] > Reduced generated-vector iterations: %s" % (mode, detail))
+  else:
+    reason = full_reason or "no supported 2-iteration encoded-count generator"
+
+    if not os.path.isfile(os.path.join(TDIR, "test_modules", "m%05d.py" % mode)):
+      reason = "no Python test module"
+
+    print("[ test.py ] [ Type %d ] > Full iterations: %s" % (mode, reason))
+
+
 def oracle_env(mode, optimized):
   # The environment of an oracle run. A multi run loads its vectors together, so the runner is told
   # what -HH says about hashes that share a salt: where they are not allowed, UNIQUE_SALT keeps it from
   # drawing one salt twice, and where they are, SHARED_SALT has some of the vectors share a salt, so
   # that the run tests it.
+
+  report_iterations(mode)
 
   env = dict(os.environ)
   env["IS_OPTIMIZED"] = "1" if optimized else "0"
@@ -1069,10 +1117,9 @@ def attacks_for(spec, mode):
 
 
 def decode_hashfile(mode, digest):
-  # test.sh/1062: the base64 decodes to the file hashcat reads. 22000/22001 are handed their
-  # line as is instead.
+  # test.sh encodes container files as base64. Optional binary modes receive their text line.
 
-  if mode in (22000, 22001):
+  if b"OPTS_TYPE_BINARY_HASHFILE_OPTIONAL" in module_source(mode):
     return (digest + "\n").encode("ascii")
 
   return base64.b64decode(digest)
@@ -1537,6 +1584,9 @@ def combinator_init_params(mode):
   elif mode == 14100:
     init_min = 0
     min_offset = 3
+  elif mode == 14300:
+    init_min = 0
+    min_offset = 3
   elif mode == 14900:
     init_min = 0
     min_offset = 5
@@ -1600,7 +1650,7 @@ def combinator_single_range(mode):
 
   smin, smax = 1, 8
 
-  if mode in (14000, 14100, 14900, 15400):
+  if mode in (14000, 14100, 14300, 14900, 15400):
     smin, smax = 0, 5
   elif mode == 20510:
     smin = 2
@@ -1880,7 +1930,7 @@ def a3_single_max(mode):
   # test.sh attack_3 single (test.sh): the number of hashes a single-hash run covers. Some
   # modes cap it lower because they carry a minimum password length.
 
-  if mode in (14000, 14100, 14900, 15400):
+  if mode in (14000, 14100, 14300, 14900, 15400):
     return 1
 
   if mode in (2500, 16800, 22000):
@@ -1891,11 +1941,11 @@ def a3_single_max(mode):
 
 def a3_single_mask(mode, word, i):
   # test.sh attack_3 single mask (test.sh): the first i bytes become a '?d' run rewritten to
-  # spell them and the rest of the password trails as literals. 14000 and 14100 hand hashcat the
-  # whole password as a literal mask instead, and 20510 drops the leading groups the mode does not
-  # keep.
+  # spell them and the rest of the password trails as literals. 14000, 14100 and 14300 hand hashcat
+  # the whole password as a literal mask instead, and 20510 drops the leading groups the mode does
+  # not keep.
 
-  if mode in (14000, 14100):
+  if mode in (14000, 14100, 14300):
     return word
 
   if mode == 20510:
@@ -2170,11 +2220,11 @@ def multi_len_params(mode, attack=None):
 
   if mode == 2500:
     min_len = 7
-  elif mode in (14000, 14100, 14900, 15400):
+  elif mode in (14000, 14100, 14300, 14900, 15400):
     # The oracle makes one password length only, so every slot is pinned to it, or the hybrid multi
     # runs feed hashcat an empty hash file. The split keeps the masked part to a few bytes: the tail
     # for -a 6 and the head for -a 7.
-    fixed_len = {14000: 8, 14100: 24, 14900: 10, 15400: 32}[mode]
+    fixed_len = {14000: 8, 14100: 24, 14300: 16, 14900: 10, 15400: 32}[mode]
     min_len   = 3 if attack == 7 else fixed_len - 5
   elif mode == 16800:
     min_len = 7
@@ -2289,7 +2339,7 @@ def a6_single_params(mode):
 
   if mode == 2500:
     max_i = 6
-  elif mode in (14000, 14100, 14900, 15400):
+  elif mode in (14000, 14100, 14300, 14900, 15400):
     min_i, max_i = 0, 1
   elif mode == 16800:
     max_i = 6
@@ -2507,6 +2557,8 @@ def a7_single_params(mode):
     min_i, max_i, mask_offset = 0, 1, 4
   elif mode == 14100:
     min_i, max_i, mask_offset = 0, 1, 3
+  elif mode == 14300:
+    min_i, max_i, mask_offset = 0, 1, 3
   elif mode == 14900:
     min_i, max_i, mask_offset = 0, 1, 5
   elif mode == 15400:
@@ -2647,7 +2699,7 @@ def a7_multi_max(mode):
     max_i = 8
   elif mode == 8500:
     max_i = 8
-  elif mode in (14000, 14100, 14900, 15400, 16800, 22000):
+  elif mode in (14000, 14100, 14300, 14900, 15400, 16800, 22000):
     max_i = 5
   elif mode in (33501, 33502):
     max_i = 3
@@ -2756,7 +2808,7 @@ def attack_7(r):
 # nothing for a mask on both sides of the word to vary, and 20510 reports a plaintext that is not the
 # candidate it was given. attack_6 and attack_7 already cover these (test.sh).
 
-A12_SKIP = {14000, 14100, 14900, 15400, 20510}
+A12_SKIP = {14000, 14100, 14300, 14900, 15400, 20510}
 
 
 def a12_single_max(mode):
@@ -4461,6 +4513,7 @@ COVERAGE_UNTESTABLE = {
   9820:  "MS Office <= 2003 SHA1 + RC4 collider #2, not a wordlist or mask crack",
   10410: "PDF 1.1 - 1.3 collider #1, not a wordlist or mask crack",
   10420: "PDF 1.1 - 1.3 collider #2, not a wordlist or mask crack",
+  79000: "FPGA fleet simulator, computes no hashes and returns the self-test digest for every candidate",
 }
 
 
@@ -4481,7 +4534,7 @@ def run_test_coverage():
   # CONTAINER_MODES carries the cryptoloop kernel numbers (14511..14553) as labels; every one runs
   # hashcat with -m 14500, the only module that exists, so collapse them to it for this check.
   container = {14600, 34100} | set(LUKS1_HASH_CIPHER) | TC_MODES | set(VC_MODES) | {14500}
-  covered   = set(discover_modes()) | container | SELFTEST_MODES
+  covered   = set(discover_modes(with_hardware=True)) | container | SELFTEST_MODES
 
   missing = sorted(m for m in all_modes if m not in covered and m not in COVERAGE_UNTESTABLE)
   orphans = sorted(container - set(all_modes))
@@ -4586,17 +4639,19 @@ def selftest_line(ctx, v, e):
   return line
 
 
-def selftest_context(args, mode, attack, width_label):
+def selftest_context(args, mode, attack, width_label, generated=False):
   # Like context() but for the self-test line: it always says single, carries the width as a label so
   # the sweep can pass "default", and ends with the ", self-test vector" tag container_run_and_report
   # adds (test.sh).
 
   dev = device_for(args, mode)
 
+  vector_label = "generated test vector" if generated else "self-test vector"
+
   return ("[ test.py ] [ Type %d, Attack %d, Mode single, Device-Type %s, Kernel-Type %s, "
-          "Vector-Width %s, self-test vector ]"
+          "Vector-Width %s, %s ]"
           % (mode, attack, DEVICE_LABEL.get(dev, dev),
-             "Pure" if args.pure else "Optimized", width_label))
+             "Pure" if args.pure else "Optimized", width_label, vector_label))
 
 
 def selftest_vector_test(args, opts, mode, attack, width_label, tmp):
@@ -4614,6 +4669,8 @@ def selftest_vector_test(args, opts, mode, attack, width_label, tmp):
 
   lines = []
 
+  generated_vector = False
+  full_reason = None
   vector = selftest_vector_read(mode)
 
   if vector is None:
@@ -4623,6 +4680,32 @@ def selftest_vector_test(args, opts, mode, attack, width_label, tmp):
     return lines
 
   vhash, vpass, vfmt, deprecated = vector
+
+  if test_iterations.iteration_reduction_enabled(mode):
+    env = dict(os.environ)
+    env["IS_OPTIMIZED"] = "0"
+    proc = subprocess.run([sys.executable, RUNNER, "selftest_hash", str(mode)], env=env,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    if proc.returncode not in (0, 3):
+      lines.append("[ test.py ] [ Type %d ] > Error : reduced-iteration oracle failed: %s"
+                   % (mode, proc.stderr.decode("utf-8", "replace").strip()))
+      note_verdict("Error")
+
+      return lines
+
+    if proc.returncode == 3:
+      full_reason = "Python oracle dependency unavailable: %s" % proc.stderr.decode("utf-8", "replace").strip().replace("\n", " ")
+    else:
+      generated = json.loads(proc.stdout)
+      generated_vector = True
+      vhash = generated["hash"].encode("utf-8")
+      vpass = bytes.fromhex(generated["password_hex"])
+
+      if "binary file only" in vfmt:
+        vhash = decode_hashfile(mode, generated["hash"]).hex().encode("ascii")
+
+  report_iterations(mode, full_reason)
 
   hash_file = os.path.join(tmp, "%d_selftest.hash" % mode)
 
@@ -4661,7 +4744,7 @@ def selftest_vector_test(args, opts, mode, attack, width_label, tmp):
   e   = selftest_status(rc)
   msg = selftest_verdict(e)
 
-  lines.append(selftest_line(selftest_context(args, mode, attack, width_label), msg, e))
+  lines.append(selftest_line(selftest_context(args, mode, attack, width_label, generated_vector), msg, e))
   note_verdict(msg)
 
   return lines
@@ -4717,6 +4800,8 @@ def sweep_range(spec):
   if re.fullmatch(r"[0-9]+", spec):
     v = int(spec)
 
+    hardware_refuse(v)
+
     return (v, v, False)
 
   m = re.fullmatch(r"([0-9]+)-([0-9]+)", spec)
@@ -4744,6 +4829,9 @@ def selftest_sweep_modes():
 
     if m is not None:
       modes.append(int(m.group(1)))
+
+  if hardware_ok() == False:
+    modes = [m for m in modes if m not in HARDWARE_MODES]
 
   return modes
 
@@ -4778,7 +4866,7 @@ def selftest_vector_sweep(args):
   sweep_na    = ""
 
   if not args.selftest_child:
-    print("[ test.py ] > Cracking every hash-mode's own self-test vector")
+    print("[ test.py ] > Cracking one test vector per hash-mode")
 
   with work_dir("test_py_") as tmp:
     for sweep_mode in sweep_modes:
@@ -4822,7 +4910,7 @@ def selftest_vector_sweep(args):
 
 def selftest_print_summary(sweep_ok, sweep_total, sweep_slow, sweep_na, sweep_bad, sweep_fault):
   print("")
-  print("[ test.py ] > %d/%d hash-modes cracked their own self-test vector"
+  print("[ test.py ] > %d/%d hash-modes cracked their test vector"
         % (sweep_ok, sweep_total))
 
   if sweep_slow:
@@ -4878,7 +4966,7 @@ def run_parallel_selftest(args):
   sweep_bad   = ""
   sweep_fault = ""
 
-  print("[ test.py ] > Cracking every hash-mode's own self-test vector")
+  print("[ test.py ] > Cracking one test vector per hash-mode")
 
   with ThreadPoolExecutor(max_workers=args.jobs) as pool:
     for mode, out in zip(selected, pool.map(run_one, selected)):
@@ -5017,18 +5105,24 @@ EDGE_RUNTIME    = 270
 
 EDGE_SKIP_MODES = {2000}
 
-# 14000/14100/31500/31600 crack a plaintext other than the one the hash was made from, and
+# 14000/14100/14300/31500/31600 crack a plaintext other than the one the hash was made from, and
 # 22000/22001 write the handshake parts rather than hash and plaintext, so their outfile cannot be
 # compared to what the oracle generated (test_edge.sh SKIP_OUT_MATCH_HASH_TYPES).
 
-EDGE_SKIP_OUT_MATCH = {14000, 14100, 22000, 22001, 31500, 31600}
+EDGE_SKIP_OUT_MATCH = {14000, 14100, 14300, 22000, 22001, 31500, 31600}
 
 # 1500 prints a recovered byte above 0x7f with its top bit cleared wherever that leaves it printable
 # (module_build_plain_postprocess). DES ignores that bit, so the printed password is another spelling
 # of the generated one with the same hash. Its outfile is checked through the module's own verify
 # rather than compared literally.
 
-EDGE_VERIFY_OUT = {1500}
+# 36901 prints the diversified key rather than the five-byte candidate index.
+
+# 37902 and 37903 fill a single 64 byte password block, so every password that shares its first 32
+# characters derives the same key and opens the same container. A mask or a hybrid attack finds one
+# of those rather than the one the oracle generated, which is a correct password either way, so the
+# outfile goes through the module's verify instead of a literal compare.
+EDGE_VERIFY_OUT = {1500, 36901, 37902, 37903}
 
 # The modes whose -HH says same-salt is "Not" allowed but that the suite runs with a shared salt
 # anyway (test_edge.sh SKIP_SAME_SALT_HASH_TYPES, the active list).
@@ -5191,6 +5285,8 @@ def edge_oracle(mode, attack, optimized):
   # The edge vectors for one mode, attack and kernel family, from the same engine test_edge.sh's
   # run_oracle uses. Each line is mode,attack,optimized,word_len,salt_len,word_hex,salt_hex,hash_hex;
   # the fields are hex so a comma or quote in the value never splits the line.
+
+  report_iterations(mode)
 
   proc = subprocess.run([sys.executable, RUNNER, "edge", str(mode), str(attack),
                          "1" if optimized else "0"],
@@ -5539,6 +5635,8 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
 
       errors += 1
 
+      log_result(rc)
+
       print("[ test.py edge ] !> error (%d) Type %d, Attack %d, Kernel %s, Vector %d, Test %d, single"
             % (rc, ctx.mode, ctx.attack, ctx.ktype, width, i))
 
@@ -5564,6 +5662,8 @@ def edge_single(ctx, width, opts, outfile, vectors, tmp):
         continue
 
       errors += 1
+
+      log_result(10)
 
       print("[ test.py edge ] !> mismatch Type %d, Attack %d, Kernel %s, Vector %d, Test %d, single"
             % (ctx.mode, ctx.attack, ctx.ktype, width, i))
@@ -5770,6 +5870,8 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
     if attack == 9 and b"Mixed iteration counts are not supported" in out:
       return 0, 1, False
 
+    log_result(rc)
+
     print("[ test.py edge ] !> error (%d) Type %d, Attack %d, Kernel %s, Vector %d, multi"
           % (rc, mode, attack, ctx.ktype, width))
 
@@ -5790,6 +5892,8 @@ def edge_multi(ctx, width, opts, outfile, vectors, tmp):
   if got != want:
     if edge_out_verifies(mode, raw, [dig for _, _, _, dig in selected], tmp) == True:
       return 0, 1, False
+
+    log_result(10)
 
     print("[ test.py edge ] !> mismatch Type %d, Attack %d, Kernel %s, Vector %d, multi"
           % (mode, attack, ctx.ktype, width))
@@ -5945,6 +6049,8 @@ def edge_select_modes(spec, modes):
 
   if re.fullmatch(r"[0-9]+", spec):
     ht = int(spec)
+
+    hardware_refuse(ht)
 
     if ht not in modes:
       die("! hash type %d has no tools/test_modules/m%05d.py, so test.py --edge cannot run it"
@@ -6315,9 +6421,8 @@ def run_parallel_depth(args):
 def bridge_family(mode):
   # The bridge hashes in Python, so it has no kernel of its own and the optimized/pure split does not
   # apply to the crack. It still draws its candidates from the mode's oracle, which offers one
-  # constraint set per family (word slot 0 is pure, slot 2 is optimized; [-1, -1] means that family
-  # has no kernel). So pick the family the mode actually has, preferring pure, which covers almost
-  # every mode; a few dozen are optimized only. Returns "p", "o", or None when the mode has an oracle
+  # constraint set per family, or None when that family has no kernel. Prefer pure, which covers
+  # almost every mode. A few dozen are optimized only. Returns "p", "o", or None when the mode has an oracle
   # with neither, so there is nothing to generate.
   tests = os.path.join(TDIR, "test_modules")
   path  = os.path.join(tests, "m%05d.py" % mode)
@@ -6335,9 +6440,9 @@ def bridge_family(mode):
 
   spec.loader.exec_module(mod)
 
-  pairs    = mod.module_constraints()
-  has_pure = not (pairs[0][0] == -1 and pairs[0][1] == -1)
-  has_opt  = not (pairs[2][0] == -1 and pairs[2][1] == -1)
+  bounds   = mod.module_test_properties()["constraints"]
+  has_pure = bounds["pure"] is not None
+  has_opt  = bounds["optimized"] is not None
 
   if has_pure:
     return "p"
@@ -6480,8 +6585,10 @@ def main():
                   help="crack each mode's own test oracle through the Python bridge (-m 73000), no mode kernel")
   ap.add_argument("-f", dest="force", action="store_true", help="pass --force to hashcat")
   ap.add_argument("-V", dest="vector", default="default", help="1 | 4 | default (both)")
+  ap.add_argument("--artificially-low-iteration-count", action="store_true",
+                  help="generate supported test hashes with 2 iterations")
   ap.add_argument("-S", dest="selftest_all", action="store_true",
-                  help="crack every mode's own self-test vector (the -m range, or all modes)")
+                  help="crack selftest hash of each mode")
   ap.add_argument("-M", dest="minimal", action="store_true",
                   help="minimal mode: full-test the 24 hash types covering all distinct code paths")
   ap.add_argument("-g", dest="generate", action="store_true",
@@ -6494,6 +6601,8 @@ def main():
                   help="print the container test modes (TrueCrypt, VeraCrypt, CryptoLoop, LUKS) and exit; "
                        "these crack a shipped or fetched container file and have no oracle, so a mode "
                        "list builder cannot find them from the test modules on disk")
+  ap.add_argument("--list-hardware-modes", dest="list_hardware_modes", action="store_true",
+                  help="print hardware-only hash modes and exit, regardless of HCFPGA_TEST")
   ap.add_argument("--compute-sanitizer", dest="compute_sanitizer", nargs="?", const="memcheck",
                   default=None, metavar="TOOL",
                   help="run the CUDA kernels under NVIDIA Compute Sanitizer (memcheck|racecheck|"
@@ -6534,6 +6643,11 @@ def main():
     print(" ".join(str(m) for m in sorted(CONTAINER_MODES)))
     sys.exit(0)
 
+  # CI needs the hardware exclusions even when local hardware testing is enabled.
+  if args.list_hardware_modes:
+    print(" ".join(str(m) for m in sorted(HARDWARE_MODES)))
+    sys.exit(0)
+
   # --compute-sanitizer points hashcat at the sweep shim, which wraps every run in
   # tools/compute_sanitizer/run.py under NVIDIA Compute Sanitizer and routes findings into a results
   # directory. The same BIN indirection test.sh used, so the rest of the run is unchanged.
@@ -6567,6 +6681,14 @@ def main():
 
   if args.attack is None:
     args.attack = "all" if args.edge else "0"
+
+  if args.artificially_low_iteration_count:
+    os.environ[test_iterations.ITERATION_ENV] = "true"
+
+  try:
+    test_iterations.iteration_reduction_requested()
+  except ValueError as exc:
+    die("! %s" % exc)
 
   setup_isolation()
 
@@ -6691,6 +6813,8 @@ def main():
       LUKS_TESTS_DIR  = os.path.join(tmp, "luks_tests_gen")
       LUKS2_TESTS_DIR = os.path.join(tmp, "luks2_tests_gen")
     for mode in selected:
+      report_iterations(mode)
+
       # STDOUT (2000) is not a crack: its kernel is empty, so it is tested by a --stdout round trip
       # (test.sh does the same). Handled before the kernel/oracle checks, which do not apply to it.
       if mode == STDOUT_MODE:
@@ -6710,6 +6834,9 @@ def main():
       # -g adds a real-archive test (GPG/PKZIP/RAR/7-Zip/PDF/OpenSSH) on top of the mode's oracle,
       # which still runs below (test.sh: -g is in addition to the oracle, not in place of it).
       if args.generate and mode in ARCHIVE_GEN_MODES:
+        if test_iterations.iteration_reduction_requested():
+          print("[ test.py ] [ Type %d ] > External archive: full application counts" % mode)
+
         run_generate_archive(args, mode, tmp)
 
       # A SELFTEST_MODES member with no .py oracle takes the self-test vector path. test.sh runs it

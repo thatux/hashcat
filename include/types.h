@@ -162,6 +162,8 @@ typedef enum event_identifier
   EVENT_BACKEND_SESSION_HOSTMEM    = 0x000000a2,
   EVENT_BACKEND_DEVICE_INIT_POST   = 0x000000a3,
   EVENT_BACKEND_DEVICE_INIT_PRE    = 0x000000a4,
+  EVENT_OUTCHECK_PREFLIGHT_POST    = 0x00000150,
+  EVENT_OUTCHECK_PREFLIGHT_PRE     = 0x00000151,
   EVENT_OUTERLOOP_FINISHED         = 0x000000b0,
   EVENT_OUTERLOOP_MAINSCREEN       = 0x000000b1,
   EVENT_OUTERLOOP_STARTING         = 0x000000b2,
@@ -294,13 +296,24 @@ typedef enum status_rc
 
 typedef enum rc_final
 {
-  RC_FINAL_ERROR            = -1,
-  RC_FINAL_OK               = 0,
-  RC_FINAL_EXHAUSTED        = 1,
-  RC_FINAL_ABORT            = 2,
-  RC_FINAL_ABORT_CHECKPOINT = 3,
-  RC_FINAL_ABORT_RUNTIME    = 4,
-  RC_FINAL_ABORT_FINISH     = 5,
+  RC_FINAL_ERROR_BRIDGE       = -13,
+  RC_FINAL_ERROR_TASK         = -12,
+  RC_FINAL_ERROR_SELFTEST     = -11,
+  RC_FINAL_ERROR_AUTOTUNE     = -10,
+  RC_FINAL_ERROR_MIXED        = -9,
+  RC_FINAL_ERROR_EXTRA_SIZE   = -8,
+  RC_FINAL_ERROR_KERNELCREATE = -6,
+  RC_FINAL_ERROR_KERNELBUILD  = -5,
+  RC_FINAL_ERROR_MEMORY_HIT   = -4,
+  RC_FINAL_ERROR_RUNTIME_SKIP = -3,
+  RC_FINAL_ERROR_COMMAND      = -2,
+  RC_FINAL_ERROR              = -1,
+  RC_FINAL_OK                 = 0,
+  RC_FINAL_EXHAUSTED          = 1,
+  RC_FINAL_ABORT              = 2,
+  RC_FINAL_ABORT_CHECKPOINT   = 3,
+  RC_FINAL_ABORT_RUNTIME      = 4,
+  RC_FINAL_ABORT_FINISH       = 5,
 
 } rc_final_t;
 
@@ -439,6 +452,9 @@ typedef enum kern_run
   KERN_RUN_INIT2  = 5000,
   KERN_RUN_LOOP2P = 5999,
   KERN_RUN_LOOP2  = 6000,
+  KERN_RUN_INIT3  = 6001,
+  KERN_RUN_LOOP3P = 6999,
+  KERN_RUN_LOOP3  = 7000,
   KERN_RUN_AUX1   = 7001,
   KERN_RUN_AUX2   = 7002,
   KERN_RUN_AUX3   = 7003,
@@ -477,6 +493,9 @@ typedef enum hc_dev_kern
   HC_DEV_KERN_INIT2,
   HC_DEV_KERN_LOOP2P,
   HC_DEV_KERN_LOOP2,
+  HC_DEV_KERN_INIT3,
+  HC_DEV_KERN_LOOP3P,
+  HC_DEV_KERN_LOOP3,
   HC_DEV_KERN_MP,
   HC_DEV_KERN_MP_L,
   HC_DEV_KERN_MP_R,
@@ -525,6 +544,9 @@ typedef enum hc_dev_kern
 #define KERN_BIT_INIT2          (1ULL << HC_DEV_KERN_INIT2)
 #define KERN_BIT_LOOP2_PREPARE  (1ULL << HC_DEV_KERN_LOOP2P)
 #define KERN_BIT_LOOP2          (1ULL << HC_DEV_KERN_LOOP2)
+#define KERN_BIT_INIT3          (1ULL << HC_DEV_KERN_INIT3)
+#define KERN_BIT_LOOP3_PREPARE  (1ULL << HC_DEV_KERN_LOOP3P)
+#define KERN_BIT_LOOP3          (1ULL << HC_DEV_KERN_LOOP3)
 #define KERN_BIT_TM             (1ULL << HC_DEV_KERN_TM)
 #define KERN_BIT_AUX1           (1ULL << HC_DEV_KERN_AUX1)
 #define KERN_BIT_AUX2           (1ULL << HC_DEV_KERN_AUX2)
@@ -767,6 +789,14 @@ typedef enum opts_type
   OPTS_TYPE_MT_HEX                   = (1ULL << 28), // mask is always in hex
   OPTS_TYPE_HASH_COPY                = (1ULL << 29),
   OPTS_TYPE_HASH_SPLIT               = (1ULL << 30),
+
+  // Optional binary input uses callbacks for files and the decoder for inline hashes.
+  OPTS_TYPE_BINARY_HASHFILE_DIRECT   = (1ULL << 31),
+
+  // One candidate per work group at an accel the module's tuning fixed. Under CUDA, whose runtime
+  // says how many work groups an SM holds, the backend drops a mostly empty last wave from it.
+  OPTS_TYPE_ACCEL_WHOLE_WAVES        = (1ULL << 32),
+
                                                      // like a hook12 kernel but without extra buffers.
                                                      // but unlike a hook kernel this kernel is called for every _loop iteration offset
   OPTS_TYPE_BINARY_HASHFILE          = (1ULL << 45),
@@ -776,7 +806,7 @@ typedef enum opts_type
   OPTS_TYPE_DEEP_COMP_KERNEL         = (1ULL << 49), // if we have to iterate through each hash inside the comp kernel, for example if each hash has to be decrypted separately
   OPTS_TYPE_SUGGEST_KG               = (1ULL << 51), // suggest keep guessing for modules the user maybe wants to use --keep-guessing
 
-  // Bits 31 to 44 and bit 50 are free. They held the 16 flags that said which kernels a session
+  // Bits 32 to 44 and bit 50 are free. They held flags that said which kernels a session
   // runs, and those are a mask over hc_dev_kern_t now, read through hashconfig_t.kern_bits. A module
   // names the ones it provides in module_kern_bits (), and hashcat turns on _init, _loop and _comp
   // itself for a slow hash, which is what the removed INIT, LOOP and COMP flags did.
@@ -788,7 +818,7 @@ typedef enum opts_type
   OPTS_TYPE_MP_MULTI_DISABLE         = (1ULL << 56), // do not multiply the kernel-accel with the multiprocessor count per device to allow more fine-tuned workload settings
   OPTS_TYPE_THREAD_MULTI_DISABLE     = (1ULL << 57), // do not multiply the kernel-power with the thread count per device for super slow algos
   OPTS_TYPE_NATIVE_THREADS           = (1ULL << 58), // forces "native" thread count: CPU=1, GPU-Intel=8, GPU-AMD=64 (wavefront), GPU-NV=32 (warps)
-  OPTS_TYPE_MAXIMUM_THREADS          = (1ULL << 59), // disable else branch in pre-compilation thread count optimization setting
+  OPTS_TYPE_MAXIMUM_THREADS          = (1ULL << 59), // autotune takes the largest workgroup that still reaches the most resident threads
   OPTS_TYPE_POST_AMP_UTF16LE         = (1ULL << 60), // run the utf8 to utf16le conversion kernel after they have been processed from amplifiers
   OPTS_TYPE_AUTODETECT_DISABLE       = (1ULL << 61), // skip autodetect engine
   OPTS_TYPE_STOCK_MODULE             = (1ULL << 62), // module included with hashcat default distribution
@@ -941,6 +971,15 @@ typedef enum parser_rc
   PARSER_CRYPTOAPI_KERNELTYPE = -46,
   PARSER_CRYPTOAPI_KEYSIZE    = -47,
   PARSER_ZSTD_UNAVAILABLE     = -48,
+
+  PARSER_PKZIP_MEMBER_EMPTY       = -49,
+  PARSER_PKZIP_MEMBER_UNSUPPORTED = -50,
+  PARSER_PKZIP_MEMBER_INDEX       = -51,
+  PARSER_PKZIP_MEMBER_TOO_SHORT   = -52,
+  PARSER_ZLIB_UNAVAILABLE         = -53,
+
+  PARSER_SEVEN_ZIP_METHOD_UNSUPPORTED = -54,
+
   PARSER_HAVE_ERRNO           = -100,
   PARSER_UNKNOWN_ERROR        = -255
 
@@ -1412,6 +1451,7 @@ typedef struct hashes
   u32          digests_done;
   u32          digests_done_pot;
   u32          digests_done_zero;
+  u32          digests_done_outcheck;
   u32          digests_done_new;
   u32          digests_saved;
 
@@ -1454,6 +1494,16 @@ typedef struct hashes
   bool         radix_deduped;
   bool         radix_digests_reordered;
 
+  // the salts still to crack and what hashconfig->combined_len_max leaves for the password beside
+  // them, filled when the module sets that limit
+
+  u32          combined_salts_cnt;
+  u32          combined_salts_short;
+  u32          combined_salt_len_min;
+  u32          combined_salt_len_max;
+  u32          combined_pw_len_min;
+  u32          combined_pw_len_max;
+
 } hashes_t;
 
 typedef struct hashconfig
@@ -1495,6 +1545,10 @@ typedef struct hashconfig
 
   u32   salt_min;
   u32   salt_max;
+
+  // what password and salt may take together, where a kernel keeps both in one buffer, or 0
+
+  u32   combined_len_max;
 
   // hash count limit
 
@@ -1566,6 +1620,20 @@ typedef struct pw_pre
 
 #define PW_PIPE_SLOTS 2
 
+// Where a batch goes on from another position than the one it reached. A refill usually picks up
+// where the batch left off, but the brain skips the part of a chunk another client has already
+// covered, and with several devices the positions in between may have gone to another device. A
+// crack is named by the position its candidate came from, so the batch keeps each such place.
+
+#define PW_RUNS_MAX 32
+
+typedef struct pw_run
+{
+  u64 pws_idx;    // the first candidate that came from here
+  u64 words_off;  // and its position in the keyspace
+
+} pw_run_t;
+
 typedef struct pw_batch
 {
   pw_idx_t *pws_idx;
@@ -1603,6 +1671,9 @@ typedef struct pw_batch
   u64 words_off;
   u64 words_fin;
   u64 words_extra;
+
+  pw_run_t runs_buf[PW_RUNS_MAX];
+  u32      runs_cnt;
 
   // A rejected word of a feed that amplifies cost a whole cell rather than one candidate, and this
   // holds what those cells came to, in candidates. The cell itself does not survive the rejection,
@@ -1845,6 +1916,8 @@ typedef struct hc_device_param
 
   int     at_rc;                // autotune rc
 
+  bool    at_warm;              // the kernel autotune times has just run, so a timing skips its warm-up launch
+
   int     vector_width;
 
   u32     kernel_wgs[HC_DEV_KERN_CNT];
@@ -2015,6 +2088,11 @@ typedef struct hc_device_param
 
   u64     words_off_launch;
 
+  // and where inside that batch it goes on from somewhere else, read from the batch while it runs
+
+  const pw_run_t *runs_launch_buf;
+  u32             runs_launch_cnt;
+
   u64     words_done;
 
   u64     outerloop_pos;
@@ -2086,11 +2164,18 @@ typedef struct hc_device_param
   bool    has_subc;
   bool    has_bfe;
   bool    has_lop3;
-  bool    has_mov64;
-  bool    has_prmt;
   bool    has_shfw;
 
   double  spin_damp;
+
+  // How early the launch wait wakes up before a launch is expected to end, and the pinned host
+  // memory a cracking launch uploads its parameters from and copies the crack count back into.
+
+  double  launch_margin_us;
+
+  void   *launch_param_host;
+  u32    *launch_result_host;
+  bool    launch_result_valid;
 
   void   *kernel_params[PARAMCNT];
   void   *kernel_params_mp[PARAMCNT];
@@ -2133,6 +2218,11 @@ typedef struct hc_device_param
 
   kernel_param_t kernel_param;
 
+  // the loop_phases and loop_lanes of the tune_variant_t that kernel_param.module_tune came from
+
+  u32     kernel_loop_phases;
+  u32     kernel_loop_lanes;
+
   // Indexed by hc_dev_buf_t. The pool parts are their own array because there are several of them
   // per run; the slot HC_DEV_BUF_PCFG_POOL is what carries their per-backend allocation metadata.
 
@@ -2157,6 +2247,7 @@ typedef struct hc_device_param
   CUevent           cuda_event1;
   CUevent           cuda_event2;
   CUevent           cuda_event3;
+  CUevent           cuda_event_done;
 
   CUmodule          cuda_module[HC_DEV_PROGRAM_CNT];
 
@@ -2175,6 +2266,7 @@ typedef struct hc_device_param
   hipEvent_t        hip_event1;
   hipEvent_t        hip_event2;
   hipEvent_t        hip_event3;
+  hipEvent_t        hip_event_done;
 
   hipModule_t       hip_module[HC_DEV_PROGRAM_CNT];
 
@@ -2232,6 +2324,16 @@ typedef struct hc_device_param
 
   mtl_library       metal_library[HC_DEV_PROGRAM_CNT];
 
+  // A program is built at the default optimization level, or at the size level when its module asks
+  // for it. A kernel the default level cannot build comes from a second library at the size level,
+  // built from the source and options kept here. See hc_mtlCreateKernel.
+
+  mtl_library       metal_library_size[HC_DEV_PROGRAM_CNT];
+  char             *metal_program_source[HC_DEV_PROGRAM_CNT];
+  char             *metal_program_options[HC_DEV_PROGRAM_CNT];
+  char             *metal_program_size_kernels[HC_DEV_PROGRAM_CNT];
+  bool              metal_program_opt_size[HC_DEV_PROGRAM_CNT];
+
   // The archive the compiled pipelines of a program are cached in, see hc_mtlArchiveOpen.
 
   mtl_archive       metal_archive[HC_DEV_PROGRAM_CNT];
@@ -2283,6 +2385,7 @@ typedef struct hc_device_param
   cl_device_id      opencl_device;
   cl_context        opencl_context;
   cl_command_queue  opencl_command_queue;
+  cl_mem            opencl_launch_buf;
 
   cl_program        opencl_program[HC_DEV_PROGRAM_CNT];
 
@@ -2477,16 +2580,21 @@ typedef struct backend_ctx
 // launch, so the same number is a much smaller thing. A bridge whose unit is itself wide computes in
 // waves of its own width and wants many whole waves per launch, which can put its useful range in the
 // thousands, and 1024 would then express only the bottom few percent of it.
+//
+// A mode that sets OPTS_TYPE_MP_MULTI_DISABLE and OPTS_TYPE_THREAD_MULTI_DISABLE counts candidates in
+// kernel_accel as well. A memory-hard one can need tens of thousands of small candidates to fill a
+// large card, as scrypt does at r=1, and KERNEL_ACCEL_MAX_CANDIDATES is the ceiling for those.
 
 typedef enum kernel_workload
 {
-  KERNEL_ACCEL_MIN        = 1,
-  KERNEL_ACCEL_MAX        = 1024,
-  KERNEL_ACCEL_MAX_BRIDGE = 16384,
-  KERNEL_LOOPS_MIN        = 1,
-  KERNEL_LOOPS_MAX        = 1024,
-  KERNEL_THREADS_MIN      = 1,
-  KERNEL_THREADS_MAX      = 1024,
+  KERNEL_ACCEL_MIN            = 1,
+  KERNEL_ACCEL_MAX            = 1024,
+  KERNEL_ACCEL_MAX_BRIDGE     = 16384,
+  KERNEL_ACCEL_MAX_CANDIDATES = 65536,
+  KERNEL_LOOPS_MIN            = 1,
+  KERNEL_LOOPS_MAX            = 1024,
+  KERNEL_THREADS_MIN          = 1,
+  KERNEL_THREADS_MAX          = 1024,
 
 } kernel_workload_t;
 
@@ -2793,6 +2901,7 @@ typedef struct out
   int    len;
   bool   write_failed;
   bool   always_ascii;
+  bool   autohex;
 
 } out_t;
 
@@ -3130,6 +3239,13 @@ typedef struct bitmap_ctx
 
 } bitmap_ctx_t;
 
+typedef struct folder_request
+{
+  bool  given;
+  char *profile_folder;
+
+} folder_request_t;
+
 typedef struct folder_config
 {
   char *cwd;
@@ -3139,6 +3255,11 @@ typedef struct folder_config
   char *session_dir;
   char *shared_dir;
   char *cpath_real;
+
+  // What a program asked for with hashcat_session_init_folders (). folder_config_destroy () keeps it,
+  // because a restore into another working directory sets the folders above up a second time.
+
+  folder_request_t request;
 
 } folder_config_t;
 
@@ -3339,16 +3460,18 @@ typedef struct mask_ctx
   hcstat_table_t *root_table_buf;
   hcstat_table_t *markov_table_buf;
 
-  // How many character positions of the markov statistics this run can reach. The tables hold one
-  // slice per position of the longest mask hashcat accepts, and the index puts the position outermost,
-  // so a run only ever reads the first sp_pw_max_used slices: an eight character mask reaches eight of
-  // 256. Everything sp_setup_tbl () does is bounded by this, which is what keeps a four character mask
-  // from decompressing, byte swapping, filling and sorting 256 MB it cannot address.
+  // How many character positions of the markov statistics this run can reach, and the size of every
+  // buffer that is indexed by position. The index puts the position outermost, so a run only ever
+  // reads the first sp_pw_max_used slices: an eight character mask reaches eight of 256. markov_table_buf
+  // and markov_css_buf are allocated for exactly this many, on the host and on each device, and
+  // everything sp_setup_tbl () does is bounded by it, which is what keeps a four character mask from
+  // decompressing, byte swapping, filling and sorting 256 MB it cannot address.
   //
   // It is an upper bound taken over the whole mask queue rather than any one round's css_cnt, and it is
   // deliberately loose: a mask string is at least as long as the number of positions it produces, so
-  // strlen bounds it without parsing the mask. Too large only wastes work, while too small would
-  // silently change which candidate a position maps to.
+  // strlen bounds it without parsing the mask. Too large only wastes memory. Too small would be a read
+  // past the end of markov_css_buf, which is why sp_tbl_to_css () checks the round's css_cnt against it
+  // rather than trusting it.
 
   u32    sp_pw_max_used;
 
@@ -3968,6 +4091,14 @@ typedef struct status_ctx
 
   u32  stdin_read_timeout_cnt;
 
+  /**
+   * exit code refinement
+   */
+
+  // What an exit -1 becomes, see status_rc.c. 0 until an error names who has to act.
+
+  rc_final_t rc_error;
+
 } status_ctx_t;
 
 typedef struct hashcat_user
@@ -4262,6 +4393,28 @@ typedef struct module_option
 
 } module_option_t;
 
+// One way a module can run its kernels, see module_tune_variants (). module_tune is what the kernel
+// reads from kernel_param->module_tune, and kernel_accel the candidates the variant launches with.
+// loop_phases names the loop phases whose kernels module_tune governs, bit 0 for loop_prepare and
+// loop, bit 1 for loop2_prepare and loop2, bit 2 for loop3_prepare and loop3, and autotune times the
+// loop kernel of the first of them. loop_lanes is how many work items one candidate takes in those
+// loop kernels, where several candidates share a work group, and 0 keeps the whole work group per
+// candidate that OPTS_TYPE_THREAD_MULTI_DISABLE gives. loop_launches is how many launches of that
+// loop kernel one candidate's whole run costs, the other kernels it needs counted as their share of
+// that, so that the time of one launch makes a speed.
+
+typedef struct tune_variant
+{
+  u32    module_tune;
+  u32    kernel_accel;
+  u32    loop_phases;
+  u32    loop_lanes;
+  double loop_launches;
+
+} tune_variant_t;
+
+#define TUNE_VARIANTS_MAX 128
+
 typedef struct module_ctx
 {
   size_t      module_context_size;
@@ -4327,6 +4480,10 @@ typedef struct module_ctx
   u64         (*module_tmp_size)                (const hashconfig_t *, const user_options_t *, const user_options_extra_t *);
   bool        (*module_warmup_disable)          (const hashconfig_t *, const user_options_t *, const user_options_extra_t *);
 
+  u32         (*module_combined_len_max)        (const hashconfig_t *, const user_options_t *, const user_options_extra_t *);
+  u32         (*module_combined_len_pw)         (const hashconfig_t *, const user_options_t *, const user_options_extra_t *, const u32);
+  u32         (*module_combined_len_salt)       (const hashconfig_t *, const user_options_t *, const user_options_extra_t *, const salt_t *, const void *);
+
   int         (*module_hash_binary_count)       (const hashes_t *);
   int         (*module_hash_binary_parse)       (const hashconfig_t *, const user_options_t *, const user_options_extra_t *, hashes_t *);
   int         (*module_hash_binary_save)        (const hashes_t *, const u32, const u32, char **);
@@ -4358,6 +4515,8 @@ typedef struct module_ctx
   int         (*module_build_plain_postprocess) (const hashconfig_t *, const hashes_t *, const void *, const u32 *, const size_t, const int, u32 *, const size_t);
 
   bool        (*module_unstable_warning)        (const hashconfig_t *, const user_options_t *, const user_options_extra_t *, const hc_device_param_t *);
+
+  u32         (*module_tune_variants)           (const hashconfig_t *, const user_options_t *, const user_options_extra_t *, const hashes_t *, const hc_device_param_t *, tune_variant_t *, const u32);
 
   bool        (*module_potfile_custom_check)    (const hashconfig_t *, const hash_t *, const hash_t *, const void *);
 
@@ -4466,7 +4625,9 @@ typedef struct hc_token
 } hc_token_t;
 
 /**
- * hash category is relevant in usage.c (--help screen)
+ * hash category is relevant in usage.c (--help screen). The numeric order of the
+ * categories is the order in which --help groups the hash-modes, so related
+ * categories are kept next to each other.
  */
 
 typedef enum hash_category
@@ -4477,25 +4638,34 @@ typedef enum hash_category
   HASH_CATEGORY_RAW_CHECKSUM            = 4,
   HASH_CATEGORY_RAW_CIPHER_KPA          = 5,
   HASH_CATEGORY_GENERIC_KDF             = 6,
-  HASH_CATEGORY_NETWORK_PROTOCOL        = 7,
-  HASH_CATEGORY_OS                      = 8,
-  HASH_CATEGORY_DATABASE_SERVER         = 9,
-  HASH_CATEGORY_NETWORK_SERVER          = 10,
-  HASH_CATEGORY_EAS                     = 11,
-  HASH_CATEGORY_FDE                     = 12,
-  HASH_CATEGORY_DOCUMENTS               = 13,
-  HASH_CATEGORY_PASSWORD_MANAGER        = 14,
-  HASH_CATEGORY_ARCHIVE                 = 15,
-  HASH_CATEGORY_FORUM_SOFTWARE          = 16,
-  HASH_CATEGORY_OTP                     = 17,
-  HASH_CATEGORY_PLAIN                   = 18,
-  HASH_CATEGORY_FRAMEWORK               = 19,
-  HASH_CATEGORY_PRIVATE_KEY             = 20,
-  HASH_CATEGORY_IMS                     = 21,
-  HASH_CATEGORY_CRYPTOCURRENCY_WALLET   = 22,
-  HASH_CATEGORY_FBE                     = 23,
-  HASH_CATEGORY_APPLICATION_DATABASE    = 24,
+  HASH_CATEGORY_USER_DEFINED            = 7,
+
+  HASH_CATEGORY_NETWORK_PROTOCOL        = 8,
+  HASH_CATEGORY_NETWORK_SERVER          = 9,
+  HASH_CATEGORY_DATABASE_SERVER         = 10,
+
+  HASH_CATEGORY_OS                      = 11,
+  HASH_CATEGORY_EAS                     = 12,
+  HASH_CATEGORY_FRAMEWORK               = 13,
+  HASH_CATEGORY_FORUM_SOFTWARE          = 14,
+  HASH_CATEGORY_MESSAGING               = 15,
+  HASH_CATEGORY_APPLICATION_DATABASE    = 16,
+
+  HASH_CATEGORY_FDE                     = 17,
+  HASH_CATEGORY_FBE                     = 18,
+  HASH_CATEGORY_ARCHIVE                 = 19,
+  HASH_CATEGORY_DOCUMENTS               = 20,
+
+  HASH_CATEGORY_PASSWORD_MANAGER        = 21,
+  HASH_CATEGORY_PRIVATE_KEY             = 22,
+  HASH_CATEGORY_CRYPTOCURRENCY_WALLET   = 23,
+  HASH_CATEGORY_OTP                     = 24,
+  HASH_CATEGORY_RFID                    = 25,
+
+  HASH_CATEGORY_PLAIN                   = 26,
+
   HASH_CATEGORY_UNDEFINED               = -1,
+
 } hash_category_t;
 
 // hash specific

@@ -261,6 +261,10 @@ void pw_pre_add (hc_device_param_t *device_param, const u8 *pw_buf, const int pw
 
       pw_pre->base_len = base_len;
     }
+    else
+    {
+      pw_pre->base_len = 0;
+    }
 
     pw_pre->rule_idx = rule_idx;
 
@@ -274,11 +278,20 @@ void pw_pre_add (hc_device_param_t *device_param, const u8 *pw_buf, const int pw
   }
 }
 
-void pw_base_add (pw_batch_t *batch, const u64 pws_max, pw_pre_t *pw_pre)
+void pw_base_add (pw_batch_t *batch, const u64 pws_max, const u8 *base_buf, const int base_len, const int rule_idx)
 {
   if (batch->pws_base_cnt < pws_max)
   {
-    memcpy (batch->pws_base + batch->pws_base_cnt, pw_pre, sizeof (pw_pre_t));
+    // The fields rather than a pw_pre_t, because a candidate that goes straight into the batch never
+    // had one. Only these three are what build_debugdata () reads back, and the candidate itself
+    // reaches the batch through pw_add (), so copying pw_buf here would be a second copy of it.
+
+    pw_pre_t *pw_base = batch->pws_base + batch->pws_base_cnt;
+
+    memcpy (pw_base->base_buf, base_buf, base_len);
+
+    pw_base->base_len = base_len;
+    pw_base->rule_idx = rule_idx;
 
     batch->pws_base_cnt++;
   }
@@ -306,9 +319,48 @@ void pw_batch_reset (pw_batch_t *batch)
   batch->words_extra     = 0;
   batch->words_extra_amp = 0;
 
+  batch->runs_cnt = 0;
+
   batch->pws_idx[0].off = 0;
   batch->pws_idx[0].cnt = 0;
   batch->pws_idx[0].len = 0;
+}
+
+// The candidates added from here on come from words_off onwards. For an empty batch that is where it
+// starts. Otherwise it is a run of its own, see pw_run_t, and a run that has not had a candidate yet
+// is moved rather than kept, because nothing in the batch came from where it pointed.
+//
+// Both producers stop refilling once the table is full, so the bound below is only a backstop.
+
+void pw_batch_from (pw_batch_t *batch, const u64 words_off)
+{
+  if (batch->pws_cnt == 0)
+  {
+    batch->words_off = words_off;
+
+    return;
+  }
+
+  if (batch->runs_cnt > 0)
+  {
+    pw_run_t *last = &batch->runs_buf[batch->runs_cnt - 1];
+
+    if (last->pws_idx == batch->pws_cnt)
+    {
+      last->words_off = words_off;
+
+      return;
+    }
+  }
+
+  if (batch->runs_cnt >= PW_RUNS_MAX) return;
+
+  pw_run_t *run = &batch->runs_buf[batch->runs_cnt];
+
+  run->pws_idx   = batch->pws_cnt;
+  run->words_off = words_off;
+
+  batch->runs_cnt++;
 }
 
 void pw_add_zerocopy (pw_batch_t *batch, const u64 pws_max, u8 *out_buf, const int pw_len)

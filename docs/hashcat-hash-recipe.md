@@ -73,7 +73,8 @@ Only the first 16 bytes of the digest are compared, but the line holds the whole
 takes up to 512 characters for a long `pbkdf2` key. A shorter result, such as the 8 bytes of
 `mysql3(pass)` or the last 16 hex characters that `cut(md5(md5(pass) . salt), -16)` keeps, is
 compared in full. A result needs at least 8 bytes, because a shorter one would match too many
-candidates by chance. Cracking accepts either hex case, and base64 with or without `=` padding.
+candidates by chance. The 4 bytes of `xxh32` are therefore the result only of hash-mode 39600, which
+reads its own hash lines, see [Hash-modes with a stored recipe](#hash-modes-with-a-stored-recipe). Cracking accepts either hex case, and base64 with or without `=` padding.
 The outfile and output from `--show` preserve the original hash line. Because hex compares in
 either case, `cap`, `upper` and `lower` around a hex result, as in `cap(md5(pass))`, do not change
 which lines crack.
@@ -119,8 +120,9 @@ with the `*` before the salt. See [Comparisons](#comparisons) for the format.
 | `keccak224(x)` `keccak256(x)` `keccak384(x)` `keccak512(x)` | Keccak with its original padding, as Ethereum uses it, as lowercase hex |
 | `streebog_32(x)` `streebog_64(x)` | Streebog-256 and Streebog-512 (GOST R 34.11-2012), as lowercase hex in the byte order hashcat's modes 11700 and 11800 print. `streebog256(x)`, `streebog512(x)`, `gost2012_32(x)` and `gost2012_64(x)` are the same calls |
 | `hav128(x)` `hav160_4(x)` `hav256_5(x)` | HAVAL, as lowercase hex. `havN_P` names the digest size N (128, 160, 192, 224 or 256 bits) and the pass count P (3, 4 or 5). `hav128`, `hav160`, `hav192`, `hav224` and `hav256` use 3 passes, the same as `hav128_3` to `hav256_3` |
-| `tiger(x)` `tiger128(x)` `tiger160(x)` `tiger2(x)` `tth(x)` | Tiger with 3 passes, as lowercase hex in the byte order printed by PHP and the reference implementation. `tiger128` and `tiger160` keep its first 16 and 20 bytes, `tiger192` is `tiger`, and `tiger2` is Tiger2, which pads with 0x80 instead of 0x01. `tth(x)` is the Tiger tree hash of one leaf, Tiger over a 0x00 byte and `x`. It matches TTH for inputs of up to 1024 bytes. A longer input gives an inverted digest, so it cannot crack the TTH of that input. It has no `hmac_` form |
+| `tiger(x)` `tiger128(x)` `tiger160(x)` `tiger2(x)` `tiger192_4(x)` `tth(x)` | Tiger with 3 passes, as lowercase hex in the byte order printed by PHP and the reference implementation. `tiger128` and `tiger160` keep its first 16 and 20 bytes, `tiger192` is `tiger`, and `tiger2` is Tiger2, which pads with 0x80 instead of 0x01. `tiger192_4` is Tiger with 4 passes, what PHP calls tiger192,4. `tth(x)` is the Tiger tree hash of one leaf, Tiger over a 0x00 byte and `x`. It matches TTH for inputs of up to 1024 bytes. A longer input gives an inverted digest, so it cannot crack the TTH of that input. It has no `hmac_` form |
 | `mysql3(x)` | The password hash of MySQL before 4.1, 8 bytes as lowercase hex. It skips spaces and tabs as MySQL does. It can be the result, as in mode 200, or appear inside another call, as in `md5(mysql3(pass))`. It has no `hmac_` form |
+| `xxh64(x)` `xxh32(x)` | xxHash64 and xxHash32, 8 and 4 bytes as lowercase hex in their canonical big endian form. `xxh64(x, seed)` and `xxh32(x, seed)` start from a seed, as hx's `murmur3` does, and without one the seed is 0. The seed is read as a big endian number from the first 8 or 4 bytes of a single value such as `salt`, `fromhex(salt)` or a string. They have no `hmac_` form |
 | `lm(x)` | The LM hash, 16 bytes as lowercase hex. It keeps the first 14 bytes of `x`, converts ASCII letters to uppercase and pads with zero bytes. Each half of 7 bytes is a DES key that encrypts `KGS!@#$%`. It has no `hmac_` form |
 | `mdc2(x)` | MDC-2 with DES, 16 bytes as lowercase hex, as OpenSSL computes it. It has no `hmac_` form, because its 8-byte block is shorter than its digest |
 | `sne128(x)` `sne256(x)` | Snefru-128 and Snefru-256 with 8 rounds, as lowercase hex. `snefru128(x)` and `snefru256(x)` are the same calls. Their HMAC blocks are 48 and 32 bytes, the data each block takes |
@@ -438,7 +440,7 @@ than with a kernel of their own. Hash-mode 1450, for example, runs `hmac_sha256(
 a hash-mode reads its own hash format and needs no `--hash-recipe`. Its pure kernels are the recipe
 kernels of mode 4000. Where the hash-mode also has optimized kernels, `-O` runs those instead.
 
-Hash-modes 40000 to 44000 are reserved for hash-modes that are defined only by a stored recipe and
+Hash-modes 40000 to 43999 are reserved for hash-modes that are defined only by a stored recipe and
 have no optimized kernels. A new hash-mode of that kind takes the next free number in this range.
 
 The existing hash-modes of that kind moved into this range. Their old numbers still work with `-m`
@@ -523,6 +525,108 @@ new number.
 | 37300 | 40081 | `SAP CODVN H (PWDSALTEDHASH) iSSHA-256` |
 | 37301 | 40082 | `SAP CODVN H (PWDSALTEDHASH) iSSHA-384` |
 
+Every hash function of the recipe language that has no hash-mode of its own also has a raw hash-mode,
+which hashes the password alone and takes the hex digest as its hash line. These are hash-modes 40084
+to 40176, so they appear in `-hh` and `--example-hashes` like any other hash-mode.
+MD6-256 is not among them, because hash-mode 34600 already covers it and uses `md6256(pass)` for its
+pure kernels. Neither are xxHash64 and xxHash32. Hash-modes 39500 and 39600 cover them with the seed
+as the salt, and use `xxh64(pass, salt)` and `xxh32(pass, salt)` for their pure kernels.
+
+| Mode | Name | Recipe |
+|---|---|---|
+| 40084 | `MD2` | `md2(pass)` |
+| 40085 | `SHA-0` | `sha0(pass)` |
+| 40086 | `RIPEMD-128` | `rmd128(pass)` |
+| 40087 | `RIPEMD-256` | `rmd256(pass)` |
+| 40088 | `GOST R 34.11-94 (CryptoPro)` | `gost_crypto(pass)` |
+| 40089 | `Tiger` | `tiger(pass)` |
+| 40090 | `Tiger-128` | `tiger128(pass)` |
+| 40091 | `Tiger-160` | `tiger160(pass)` |
+| 40092 | `Tiger2` | `tiger2(pass)` |
+| 40093 | `TTH (Tiger Tree Hash, single leaf)` | `tth(pass)` |
+| 40094 | `Snefru-128` | `sne128(pass)` |
+| 40095 | `Snefru-256` | `sne256(pass)` |
+| 40096 | `Skein-512-224` | `skein224(pass)` |
+| 40097 | `Skein-512-256` | `skein256(pass)` |
+| 40098 | `Skein-512-384` | `skein384(pass)` |
+| 40099 | `Skein-512-512` | `skein512(pass)` |
+| 40100 | `PANAMA` | `panama(pass)` |
+| 40101 | `MDC-2` | `mdc2(pass)` |
+| 40102 | `HAVAL-128 (3 passes)` | `hav128(pass)` |
+| 40103 | `HAVAL-128 (4 passes)` | `hav128_4(pass)` |
+| 40104 | `HAVAL-128 (5 passes)` | `hav128_5(pass)` |
+| 40105 | `HAVAL-160 (3 passes)` | `hav160_3(pass)` |
+| 40106 | `HAVAL-160 (4 passes)` | `hav160_4(pass)` |
+| 40107 | `HAVAL-160 (5 passes)` | `hav160_5(pass)` |
+| 40108 | `HAVAL-192 (3 passes)` | `hav192_3(pass)` |
+| 40109 | `HAVAL-192 (4 passes)` | `hav192_4(pass)` |
+| 40110 | `HAVAL-192 (5 passes)` | `hav192_5(pass)` |
+| 40111 | `HAVAL-224 (3 passes)` | `hav224_3(pass)` |
+| 40112 | `HAVAL-224 (4 passes)` | `hav224_4(pass)` |
+| 40113 | `HAVAL-224 (5 passes)` | `hav224_5(pass)` |
+| 40114 | `HAVAL-256 (3 passes)` | `hav256(pass)` |
+| 40115 | `HAVAL-256 (4 passes)` | `hav256_4(pass)` |
+| 40116 | `HAVAL-256 (5 passes)` | `hav256_5(pass)` |
+| 40117 | `BLAKE-224` | `blake224(pass)` |
+| 40118 | `BLAKE-256` | `blake256(pass)` |
+| 40119 | `BLAKE-384` | `blake384(pass)` |
+| 40120 | `BLAKE-512` | `blake512(pass)` |
+| 40121 | `BMW-224` | `bmw224(pass)` |
+| 40122 | `BMW-256` | `bmw256(pass)` |
+| 40123 | `BMW-384` | `bmw384(pass)` |
+| 40124 | `BMW-512` | `bmw512(pass)` |
+| 40125 | `CubeHash-224` | `cube224(pass)` |
+| 40126 | `CubeHash-256` | `cube256(pass)` |
+| 40127 | `CubeHash-384` | `cube384(pass)` |
+| 40128 | `CubeHash-512` | `cube512(pass)` |
+| 40129 | `ECHO-224` | `echo224(pass)` |
+| 40130 | `ECHO-256` | `echo256(pass)` |
+| 40131 | `ECHO-384` | `echo384(pass)` |
+| 40132 | `ECHO-512` | `echo512(pass)` |
+| 40133 | `Fugue-224` | `fugue224(pass)` |
+| 40134 | `Fugue-256` | `fugue256(pass)` |
+| 40135 | `Fugue-384` | `fugue384(pass)` |
+| 40136 | `Fugue-512` | `fugue512(pass)` |
+| 40137 | `Groestl-224` | `groestl224(pass)` |
+| 40138 | `Groestl-256` | `groestl256(pass)` |
+| 40139 | `Groestl-384` | `groestl384(pass)` |
+| 40140 | `Groestl-512` | `groestl512(pass)` |
+| 40141 | `Hamsi-224` | `hamsi224(pass)` |
+| 40142 | `Hamsi-256` | `hamsi256(pass)` |
+| 40143 | `Hamsi-384` | `hamsi384(pass)` |
+| 40144 | `Hamsi-512` | `hamsi512(pass)` |
+| 40145 | `JH-224` | `jh224(pass)` |
+| 40146 | `JH-256` | `jh256(pass)` |
+| 40147 | `JH-384` | `jh384(pass)` |
+| 40148 | `JH-512` | `jh512(pass)` |
+| 40149 | `Luffa-224` | `luffa224(pass)` |
+| 40150 | `Luffa-256` | `luffa256(pass)` |
+| 40151 | `Luffa-384` | `luffa384(pass)` |
+| 40152 | `Luffa-512` | `luffa512(pass)` |
+| 40153 | `Shabal-224` | `shabal224(pass)` |
+| 40154 | `Shabal-256` | `shabal256(pass)` |
+| 40155 | `Shabal-384` | `shabal384(pass)` |
+| 40156 | `Shabal-512` | `shabal512(pass)` |
+| 40157 | `SHAvite-3-224` | `shavite224(pass)` |
+| 40158 | `SHAvite-3-256` | `shavite256(pass)` |
+| 40159 | `SHAvite-3-384` | `shavite384(pass)` |
+| 40160 | `SHAvite-3-512` | `shavite512(pass)` |
+| 40161 | `SIMD-224` | `simd224(pass)` |
+| 40162 | `SIMD-256` | `simd256(pass)` |
+| 40163 | `SIMD-384` | `simd384(pass)` |
+| 40164 | `SIMD-512` | `simd512(pass)` |
+| 40165 | `HAS-160` | `has160(pass)` |
+| 40166 | `EDON-R-256` | `edon256(pass)` |
+| 40167 | `EDON-R-512` | `edon512(pass)` |
+| 40168 | `MD6-128` | `md6(pass)` |
+| 40170 | `MD6-512` | `md6512(pass)` |
+| 40171 | `RadioGatun[32] (first 128 bits)` | `radiogatun32(pass)` |
+| 40172 | `RadioGatun[64]` | `radiogatun64(pass)` |
+| 40173 | `RIPEMD (original)` | `ripemd(pass)` |
+| 40174 | `Whirlpool-0` | `wrl0(pass)` |
+| 40175 | `Whirlpool-T` | `wrl1(pass)` |
+| 40176 | `Tiger-192,4` | `tiger192_4(pass)` |
+
 ## Limits
 
 - A recipe supports up to 16 hash, AES, DES, `xor`, `and` and `or` calls, 8 concatenated parts per
@@ -599,8 +703,10 @@ new number.
   one of them, a string or a hash call, or `utf16le` of one of these. Concatenations are not
   supported. Keys longer than the hash family's block size are hashed first, as HMAC requires. For a
   `utf16le` key, that is the length of its UTF-16LE form.
+- The seed of `xxh64` and `xxh32` must be a single part as well, but not `utf16le`. A call with a
+  seed cannot take `^N`.
 - `utf16le` accepts `pass`, `salt`, hex output and ASCII strings. It does not accept raw bytes or
-  feed the BLAKE2 and Streebog families yet, not even as an HMAC key. A password or salt with
+  feed the BLAKE2, Streebog and xxHash families yet, not even as an HMAC key. A password or salt with
   invalid UTF-8 cannot match a recipe that applies `utf16le` to it, including as an HMAC key or as
   the key or salt of `pbkdf2`.
 - `utf16be` decodes UTF-8 strictly: overlong forms, surrogates, code points above U+10FFFF and
@@ -681,6 +787,14 @@ Mode 74000's dynamic plugin supports bcrypt. It runs on the CPU and is much slow
   recipes without a loop or `pbkdf2` when nothing cuts the result. `rev` and `bswap32` of SHA-1,
   SHA-2 and some other families stay in the kernel, where they undo a byte swap the kernel makes
   anyway and cost nothing.
+- A result can join the outputs of several calls.
+  `xor(pad(md5_bin(pass), 32), wperm(sha256_bin(pass), 8, 8, 8, 8, 0, 1, 2, 3))` puts the MD5 of
+  the candidate in front of the first 16 bytes of its SHA-256. When one compared word of the result
+  comes from a single call, and other calls on the candidate follow that call, the kernel compares
+  the word as soon as the call is done. A candidate whose word differs skips the rest of the recipe,
+  so this recipe computes the SHA-256 only for a candidate whose first MD5 word matches. The word is
+  followed through `xor`, `or`, `wperm`, `pad` and cuts that start at a multiple of 4 bytes, in
+  recipes without a loop or `pbkdf2`. It is compared for each salt that has a single hash.
 - In a loop, an HMAC of MD4, MD5, SHA-1, SHA-2, RIPEMD-160 or SM3 whose key the loop does not
   change, such as `pass`, computes its key pads before the loop rather than in every iteration.
 - In a loop, a call of one of those families whose input fits one block, such as `md5_bin(h . pass)`

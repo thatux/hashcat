@@ -520,15 +520,26 @@ static int generic_instance_init (hashcat_ctx_t *hashcat_ctx, generic_ctx_t *gen
 
   if (generic_ctx->dev_enable == true)
   {
-    char source_file[256];
+    char source_file[KERNEL_PATH_SZ];
 
     generate_source_kernel_filename (false, hashcat_ctx->hashconfig->attack_exec, ATTACK_KERN_PCFG,
                                      hashcat_ctx->hashconfig->kern_type, hashcat_ctx->hashconfig->opti_type,
                                      hashcat_ctx->folder_config->shared_dir, source_file);
 
+    if (kernel_path_fits (hashcat_ctx, source_file) == false) return -1;
+
     if (hc_path_read (source_file) == false)
     {
-      if (option_table_check_feed (hashcat_ctx, LATE_FEED_ENGINE_KERNEL) == -1) return -1;
+      // Rules are the exception. The host engine applies them in the mode's optimized straight kernel,
+      // exactly as -a 0 -O -r does for a word list, and over a large ruleset that runs several times
+      // faster than the pure device kernel. So -O with rules takes the host engine instead of the refusal.
+
+      const bool rules = (hashcat_ctx->user_options->rp_files_cnt > 0) || (hashcat_ctx->user_options->rp_gen > 0);
+
+      if (rules == false)
+      {
+        if (option_table_check_feed (hashcat_ctx, LATE_FEED_ENGINE_KERNEL) == -1) return -1;
+      }
 
       generic_ctx->dev_enable = false;
     }

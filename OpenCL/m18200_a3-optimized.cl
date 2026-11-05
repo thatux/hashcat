@@ -25,6 +25,8 @@ typedef struct krb5asrep
   u32 edata2_len;
   u32 format;
 
+  u32 user[128];
+  u32 realm[128];
 } krb5asrep_t;
 
 DECLSPEC void hmac_md5_pad (PRIVATE_AS u32 *w0, PRIVATE_AS u32 *w1, PRIVATE_AS u32 *w2, PRIVATE_AS u32 *w3, PRIVATE_AS u32 *ipad, PRIVATE_AS u32 *opad)
@@ -725,7 +727,13 @@ DECLSPEC void m18200 (LOCAL_AS u32 *S, PRIVATE_AS u32 *w0, PRIVATE_AS u32 *w1, P
     tmp[2] = digest[2];
     tmp[3] = digest[3];
 
+    // the prefetching key schedule costs an AMD GPU, see inc_cipher_rc4.cl
+
+    #if defined IS_AMD_USE_HIP || defined IS_AMD_GPU
+    rc4_init_128 (S, tmp, lid);
+    #else
     rc4_init_128_virtual4 (S, tmp, lid);
+    #endif
 
     if (asrep_early_check (S, edata2_2, edata2_3, lid) == 0) continue;
 

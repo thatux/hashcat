@@ -32,34 +32,27 @@ static const u32   SALT_TYPE      = SALT_TYPE_EMBEDDED;
 static const char *ST_PASS        = "hashcat";
 static const char *ST_HASH        = "$keepass$*4*2*ef636ddf*67108864*19*2*e4e48422ecb07da38401597150a7326fdd1519007b28c306c6e7418fb8ed29cb*af527945ec56bbb37f84ef85093735b689139f46c8003f82cad269837eb69d5f*03d9a29a67fb4bb500000400021000000031c1f2e6bf714350be5805216afc5aff0304000000010000000420000000e4e48422ecb07da38401597150a7326fdd1519007b28c306c6e7418fb8ed29cb0b8b00000000014205000000245555494410000000ef636ddf8c29444b91f7a9a403e30a0c040100000056040000001300000005010000004908000000020000000000000005010000004d080000000000000400000000040100000050040000000200000042010000005320000000af527945ec56bbb37f84ef85093735b689139f46c8003f82cad269837eb69d5f000710000000257fccc1e57ecdea03bbc06aab7cd13200040000000d0a0d0a*63249b86a7539e2bbdbf0ac7f196d460e781e221d1c580d4c718dcc1493eefa9"; // tools/2hashcat_tests/keepass/keepass4_keepass.info_2.59_argon2d_defaultsettings.hash
 
-u32         module_attack_exec    (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return ATTACK_EXEC;     }
-u32         module_dgst_pos0      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return DGST_POS0;       }
-u32         module_dgst_pos1      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return DGST_POS1;       }
-u32         module_dgst_pos2      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return DGST_POS2;       }
-u32         module_dgst_pos3      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return DGST_POS3;       }
-u32         module_dgst_size      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return DGST_SIZE;       }
-u32         module_hash_category  (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return HASH_CATEGORY;   }
-const char *module_hash_name      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return HASH_NAME;       }
-u64         module_kern_type      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return KERN_TYPE;       }
-u32         module_opti_type      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return OPTI_TYPE;       }
-u64         module_opts_type      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return OPTS_TYPE;       }
-u32         module_salt_type      (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return SALT_TYPE;       }
-const char *module_st_hash        (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return ST_HASH;         }
-const char *module_st_pass        (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra) { return ST_PASS;         }
+#include "hooks_common.c"
 
-const char *module_usage_notice (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra)
+static const char *module_usage_notice (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra)
 {
-  return "You can use https://github.com/openwall/john/blob/bleeding-jumbo/src/keepass2john.c to extract the hashes";
+  return "You can use https://github.com/openwall/john/blob/bleeding-jumbo/src/keepass2john.c to extract the hashes. A database protected with a Windows user account carries that key as *2*128* and the 128 hex characters of the 64 bytes DPAPI returns for %APPDATA%\\KeePass\\ProtectedUserKey.bin";
 }
 
 typedef struct keepass4
 {
   u32 masterseed[8];
-  u32 header[64];
+
+  u32 header_len;
+  u32 header[1024];
 
   /* key-file handling */
   u32 keyfile_len;
   u32 keyfile[8];
+
+  /* Windows user account handling */
+  u32 userkey_len;
+  u32 userkey[16];
 
 } keepass4_t;
 
@@ -75,24 +68,31 @@ typedef struct merged_options
 
 #include "argon2_common.c"
 
+// The optional parts at the end of the line, each written as a marker, the length of its data in
+// hex characters and the data itself: *1*64* and 64 hex characters for the key file, then *2*128*
+// and 128 hex characters for the Windows user account key.
+
+#define KEEPASS_KEYFILE_PART_LEN (6 + 64)
+#define KEEPASS_USERKEY_PART_LEN (7 + 128)
+
 static const char *SIGNATURE_ARGON2D_UUID  = "ef636ddf";
 static const char *SIGNATURE_ARGON2ID_UUID = "9e298b19";
 
-u64 module_esalt_size (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra)
+static u64 module_esalt_size (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra)
 {
   const u64 esalt_size = (const u64) sizeof (merged_options_t);
 
   return esalt_size;
 }
 
-u64 module_tmp_size (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra)
+static u64 module_tmp_size (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra)
 {
   const u64 tmp_size = 4; // not needed here
 
   return tmp_size;
 }
 
-int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED void *digest_buf, MAYBE_UNUSED salt_t *salt, MAYBE_UNUSED void *esalt_buf, MAYBE_UNUSED void *hook_salt_buf, MAYBE_UNUSED hashinfo_t *hash_info, const char *line_buf, MAYBE_UNUSED const int line_len)
+static int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED void *digest_buf, MAYBE_UNUSED salt_t *salt, MAYBE_UNUSED void *esalt_buf, MAYBE_UNUSED void *hook_salt_buf, MAYBE_UNUSED hashinfo_t *hash_info, const char *line_buf, MAYBE_UNUSED const int line_len)
 {
   u32 *digest = (u32 *) digest_buf;
 
@@ -103,12 +103,28 @@ int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
   keepass4_t *keepass4 = &merged_options->keepass4;
 
   bool is_keyfile_present = false;
+  bool is_userkey_present = false;
 
   if (line_len < 128) return (PARSER_SALT_LENGTH);
 
-  if ((line_buf[line_len - (64 + 1 + 2 + 1 + 2)] == '*')
-   && (line_buf[line_len - (64 + 1 + 2 + 1 + 1)] == '1')
-   && (line_buf[line_len - (64 + 1 + 2 + 1 + 0)] == '*')) is_keyfile_present = true;
+  // the key file part is the last one unless a user account key follows it
+
+  int parts_len = line_len;
+
+  if (parts_len > KEEPASS_USERKEY_PART_LEN)
+  {
+    if (memcmp (line_buf + parts_len - KEEPASS_USERKEY_PART_LEN, "*2*128*", 7) == 0)
+    {
+      is_userkey_present = true;
+
+      parts_len -= KEEPASS_USERKEY_PART_LEN;
+    }
+  }
+
+  if (parts_len > KEEPASS_KEYFILE_PART_LEN)
+  {
+    if (memcmp (line_buf + parts_len - KEEPASS_KEYFILE_PART_LEN, "*1*64*", 6) == 0) is_keyfile_present = true;
+  }
 
   hc_token_t token;
 
@@ -171,8 +187,8 @@ int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
   token.attr[8]    = TOKEN_ATTR_VERIFY_LENGTH | TOKEN_ATTR_VERIFY_HEX;
 
   // 9. header
-  token.len_min[9] = 506;
-  token.len_max[9] = 506;
+  token.len_min[9] = 400;
+  token.len_max[9] = 8192; // sizeof (keepass4->header) * 2
   token.sep[9]     = '*';
   token.attr[9]    = TOKEN_ATTR_VERIFY_LENGTH | TOKEN_ATTR_VERIFY_HEX;
 
@@ -200,6 +216,28 @@ int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
     token.len[13]     = 64;
     token.attr[13]    = TOKEN_ATTR_FIXED_LENGTH
                       | TOKEN_ATTR_VERIFY_HEX;
+  }
+
+  if (is_userkey_present == true)
+  {
+    const u32 idx = token.token_cnt;
+
+    token.token_cnt += 3;
+
+    token.sep[idx + 0]  = '*';
+    token.len[idx + 0]  = 1;
+    token.attr[idx + 0] = TOKEN_ATTR_FIXED_LENGTH
+                        | TOKEN_ATTR_VERIFY_DIGIT;
+
+    token.sep[idx + 1]  = '*';
+    token.len[idx + 1]  = 3;
+    token.attr[idx + 1] = TOKEN_ATTR_FIXED_LENGTH
+                        | TOKEN_ATTR_VERIFY_DIGIT;
+
+    token.sep[idx + 2]  = '*';
+    token.len[idx + 2]  = 128;
+    token.attr[idx + 2] = TOKEN_ATTR_FIXED_LENGTH
+                        | TOKEN_ATTR_VERIFY_HEX;
   }
 
   const int rc_tokenizer = input_tokenizer ((const u8 *) line_buf, line_len, &token);
@@ -263,10 +301,11 @@ int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
   salt->salt_buf_pc[0] = argon2_options->memory_usage_in_kib;
   salt->salt_buf_pc[1] = argon2_options->parallelism;
 
-  // 9. header
+  // 9. header, its length depends on the cipher and on optional fields such as public custom data
   const int header_len = token.len[9];
   const u8 *header_pos = token.buf[9];
-  hex_decode ((const u8 *) header_pos, header_len, (u8 *) keepass4->header);
+  if ((header_len % 2) != 0) return (PARSER_HASH_VALUE);
+  keepass4->header_len = hex_decode ((const u8 *) header_pos, header_len, (u8 *) keepass4->header);
 
   // 10. headerhmac (digest): digest/ target hash
   const int digest_len = token.len[10];
@@ -305,6 +344,22 @@ int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
 
   }
 
+  keepass4->userkey_len = 0;
+
+  if (is_userkey_present == true)
+  {
+    const u8 *userkey_pos = token.buf[token.token_cnt - 1];
+
+    keepass4->userkey_len = 64;
+
+    for (int i = 0, j = 0; i < 16; i += 1, j += 8)
+    {
+      keepass4->userkey[i] = hex_to_u32 (&userkey_pos[j]);
+
+      keepass4->userkey[i] = byte_swap_32 (keepass4->userkey[i]);
+    }
+  }
+
   // check argon2 config
   if (argon2_options->version != 19 && argon2_options->version != 16) return (PARSER_HASH_VALUE);
   if (argon2_options->memory_usage_in_kib < 1) return (PARSER_HASH_VALUE);
@@ -318,7 +373,7 @@ int module_hash_decode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
   return (PARSER_OK);
 }
 
-int module_hash_encode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const void *digest_buf, MAYBE_UNUSED const salt_t *salt, MAYBE_UNUSED const void *esalt_buf, MAYBE_UNUSED const void *hook_salt_buf, MAYBE_UNUSED const hashinfo_t *hash_info, char *line_buf, MAYBE_UNUSED const int line_size)
+static int module_hash_encode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const void *digest_buf, MAYBE_UNUSED const salt_t *salt, MAYBE_UNUSED const void *esalt_buf, MAYBE_UNUSED const void *hook_salt_buf, MAYBE_UNUSED const hashinfo_t *hash_info, char *line_buf, MAYBE_UNUSED const int line_size)
 {
   const u32 *digest = (const u32 *) digest_buf;
 
@@ -337,8 +392,8 @@ int module_hash_encode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
   hex_encode( (const u8 *) salt->salt_buf, 32, (u8 *) salt_hex);
 
   // 9. header
-  char header_hex[507] = { 0 };
-  hex_encode( (const u8 *) keepass4->header, 253, (u8 *) header_hex);
+  char header_hex[(sizeof (keepass4->header) * 2) + 1] = { 0 };
+  hex_encode( (const u8 *) keepass4->header, keepass4->header_len, (u8 *) header_hex);
 
   // 10. headerhmac (digest)
   char digest_hex[65] = { 0 };
@@ -353,7 +408,9 @@ int module_hash_encode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
 
   u8 *out_buf = (u8 *) line_buf;
 
-  int out_len = 0;
+  char parts[KEEPASS_KEYFILE_PART_LEN + KEEPASS_USERKEY_PART_LEN + 1] = { 0 };
+
+  int parts_len = 0;
 
   if (keepass4->keyfile_len)
   {
@@ -371,128 +428,52 @@ int module_hash_encode (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSE
     char keyfile_hex[65] = { 0 };
     hex_encode( (const u8 *) keyfile_swap, 32, (u8 *) keyfile_hex);
 
-    out_len = snprintf ((char *) out_buf, line_size, "%s*%d*%d*%s*%d*%d*%d*%s*%s*%s*%s*1*%d*%s",
-      "$keepass$",          // 0. signature
-      4,                    // 1. keepassDB version
-      argon2_options->iterations,  // 2. iterations
-      argon_uuid,           // 3. KDF UUID
-      argon2_options->memory_usage_in_kib*1024,  // 4. memoryUsageInBytes
-      argon2_options->version,     // 5. Argon version
-      argon2_options->parallelism, // 6. parallelism
-      masterseed_hex,       // 7. masterseed
-      salt_hex,             // 8. transformseed (salt)
-      header_hex,           // 9. header
-      digest_hex,            // 10. headerhmac (digest)
-      keepass4->keyfile_len*2,
-      keyfile_hex
-    );
+    parts_len += snprintf (parts + parts_len, sizeof (parts) - parts_len, "*1*%u*%s", keepass4->keyfile_len * 2, keyfile_hex);
   }
-  else
+
+  if (keepass4->userkey_len)
   {
-    out_len = snprintf ((char *) out_buf, line_size, "%s*%d*%d*%s*%d*%d*%d*%s*%s*%s*%s",
-      "$keepass$",          // 0. signature
-      4,                    // 1. keepassDB version
-      argon2_options->iterations,  // 2. iterations
-      argon_uuid,           // 3. KDF UUID
-      argon2_options->memory_usage_in_kib*1024,  // 4. memoryUsageInBytes
-      argon2_options->version,     // 5. Argon version
-      argon2_options->parallelism, // 6. parallelism
-      masterseed_hex,       // 7. masterseed
-      salt_hex,             // 8. transformseed (salt)
-      header_hex,           // 9. header
-      digest_hex            // 10. headerhmac (digest)
-    );
+    u32 userkey_swap[16];
+
+    for (int i = 0; i < 16; i++) userkey_swap[i] = byte_swap_32 (keepass4->userkey[i]);
+
+    char userkey_hex[129] = { 0 };
+
+    hex_encode ((const u8 *) userkey_swap, 64, (u8 *) userkey_hex);
+
+    parts_len += snprintf (parts + parts_len, sizeof (parts) - parts_len, "*2*%u*%s", keepass4->userkey_len * 2, userkey_hex);
   }
+
+  const int out_len = snprintf ((char *) out_buf, line_size, "%s*%d*%d*%s*%d*%d*%d*%s*%s*%s*%s%s",
+    "$keepass$",          // 0. signature
+    4,                    // 1. keepassDB version
+    argon2_options->iterations,  // 2. iterations
+    argon_uuid,           // 3. KDF UUID
+    argon2_options->memory_usage_in_kib*1024,  // 4. memoryUsageInBytes
+    argon2_options->version,     // 5. Argon version
+    argon2_options->parallelism, // 6. parallelism
+    masterseed_hex,       // 7. masterseed
+    salt_hex,             // 8. transformseed (salt)
+    header_hex,           // 9. header
+    digest_hex,           // 10. headerhmac (digest)
+    parts                 // the key file and user account key parts
+  );
 
   return out_len;
 }
 
 void module_init (module_ctx_t *module_ctx)
 {
-  module_ctx->module_context_size             = MODULE_CONTEXT_SIZE_CURRENT;
-  module_ctx->module_interface_version        = MODULE_INTERFACE_VERSION_CURRENT;
+  module_init_common (module_ctx);
 
-  module_ctx->module_advice_notice            = MODULE_DEFAULT;
-  module_ctx->module_attack_exec              = module_attack_exec;
-  module_ctx->module_benchmark_esalt          = MODULE_DEFAULT;
-  module_ctx->module_benchmark_hook_salt      = MODULE_DEFAULT;
-  module_ctx->module_benchmark_mask           = MODULE_DEFAULT;
-  module_ctx->module_benchmark_charset        = MODULE_DEFAULT;
-  module_ctx->module_benchmark_salt           = MODULE_DEFAULT;
   module_ctx->module_benchmark_cost           = argon2_module_benchmark_cost;
-  module_ctx->module_bridge_name              = MODULE_DEFAULT;
-  module_ctx->module_bridge_type              = MODULE_DEFAULT;
-  module_ctx->module_build_plain_postprocess  = MODULE_DEFAULT;
-  module_ctx->module_deep_comp_kernel         = MODULE_DEFAULT;
-  module_ctx->module_deprecated_notice        = MODULE_DEFAULT;
-  module_ctx->module_dgst_pos0                = module_dgst_pos0;
-  module_ctx->module_dgst_pos1                = module_dgst_pos1;
-  module_ctx->module_dgst_pos2                = module_dgst_pos2;
-  module_ctx->module_dgst_pos3                = module_dgst_pos3;
-  module_ctx->module_dgst_size                = module_dgst_size;
   module_ctx->module_esalt_size               = module_esalt_size;
   module_ctx->module_extra_buffer_size        = argon2_module_extra_buffer_size;
-  module_ctx->module_extra_tmp_size           = MODULE_DEFAULT;
   module_ctx->module_extra_tuningdb_block     = argon2_module_extra_tuningdb_block;
-  module_ctx->module_forced_outfile_format    = MODULE_DEFAULT;
-  module_ctx->module_hash_binary_count        = MODULE_DEFAULT;
-  module_ctx->module_hash_binary_parse        = MODULE_DEFAULT;
-  module_ctx->module_hash_binary_save         = MODULE_DEFAULT;
-  module_ctx->module_hash_decode_postprocess  = MODULE_DEFAULT;
-  module_ctx->module_hash_decode_potfile      = MODULE_DEFAULT;
-  module_ctx->module_hash_decode_zero_hash    = MODULE_DEFAULT;
   module_ctx->module_hash_decode              = module_hash_decode;
-  module_ctx->module_hash_encode_status       = MODULE_DEFAULT;
-  module_ctx->module_hash_encode_potfile      = MODULE_DEFAULT;
   module_ctx->module_hash_encode              = module_hash_encode;
-  module_ctx->module_hash_hints               = MODULE_DEFAULT;
-  module_ctx->module_hash_init_selftest       = MODULE_DEFAULT;
-  module_ctx->module_hash_mode                = MODULE_DEFAULT;
-  module_ctx->module_hash_category            = module_hash_category;
-  module_ctx->module_hash_name                = module_hash_name;
-  module_ctx->module_hash_recipe              = MODULE_DEFAULT;
-  module_ctx->module_hashes_count_min         = MODULE_DEFAULT;
-  module_ctx->module_hashes_count_max         = MODULE_DEFAULT;
-  module_ctx->module_hlfmt_disable            = MODULE_DEFAULT;
-  module_ctx->module_hook_extra_param_size    = MODULE_DEFAULT;
-  module_ctx->module_hook_extra_param_init    = MODULE_DEFAULT;
-  module_ctx->module_hook_extra_param_term    = MODULE_DEFAULT;
-  module_ctx->module_hook12                   = MODULE_DEFAULT;
-  module_ctx->module_hook23                   = MODULE_DEFAULT;
-  module_ctx->module_hook_salt_size           = MODULE_DEFAULT;
-  module_ctx->module_hook_size                = MODULE_DEFAULT;
   module_ctx->module_jit_build_options        = argon2_module_jit_build_options;
-  module_ctx->module_jit_cache_disable        = MODULE_DEFAULT;
-  module_ctx->module_kernel_accel_max         = MODULE_DEFAULT;
-  module_ctx->module_kernel_accel_min         = MODULE_DEFAULT;
-  module_ctx->module_kernel_loops_max         = MODULE_DEFAULT;
-  module_ctx->module_kernel_loops_min         = MODULE_DEFAULT;
-  module_ctx->module_kernel_threads_max       = MODULE_DEFAULT;
-  module_ctx->module_kernel_threads_min       = MODULE_DEFAULT;
-  module_ctx->module_kern_bits                = MODULE_DEFAULT;
-  module_ctx->module_kern_type                = module_kern_type;
-  module_ctx->module_kern_type_dynamic        = MODULE_DEFAULT;
-  module_ctx->module_length_sort              = MODULE_DEFAULT;
-  module_ctx->module_opti_type                = module_opti_type;
-  module_ctx->module_opts_type                = module_opts_type;
-  module_ctx->module_outfile_check_disable    = MODULE_DEFAULT;
-  module_ctx->module_outfile_check_nocomp     = MODULE_DEFAULT;
-  module_ctx->module_potfile_custom_check     = MODULE_DEFAULT;
-  module_ctx->module_potfile_disable          = MODULE_DEFAULT;
-  module_ctx->module_potfile_keep_all_hashes  = MODULE_DEFAULT;
-  module_ctx->module_pwdump_column            = MODULE_DEFAULT;
-  module_ctx->module_pw_max                   = MODULE_DEFAULT;
-  module_ctx->module_pw_min                   = MODULE_DEFAULT;
-  module_ctx->module_register_options         = MODULE_DEFAULT;
-  module_ctx->module_salt_max                 = MODULE_DEFAULT;
-  module_ctx->module_salt_min                 = MODULE_DEFAULT;
-  module_ctx->module_salt_type                = module_salt_type;
-  module_ctx->module_separator                = MODULE_DEFAULT;
-  module_ctx->module_st_hash                  = module_st_hash;
-  module_ctx->module_st_pass                  = module_st_pass;
   module_ctx->module_tmp_size                 = module_tmp_size;
-  module_ctx->module_unstable_warning         = MODULE_DEFAULT;
   module_ctx->module_usage_notice             = module_usage_notice;
-  module_ctx->module_warmup_disable           = MODULE_DEFAULT;
 }
 

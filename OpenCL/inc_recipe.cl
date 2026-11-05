@@ -1726,6 +1726,57 @@ DECLSPEC u32 recipe_salt_decode (PRIVATE_AS u32 *out, GLOBAL_AS const u32 *in, c
 
 #endif
 
+// A compared word that comes from one earlier step alone, as word 0 of
+// xor (pad (md5_bin (pass), 32), wperm (sha256_bin (pass), 8, 8, 8, 8, 0, 1, 2, 3)) does, lets a
+// candidate leave after that step: word RECIPE_GATE_W of step RECIPE_GATE_STEP, under the mask
+// RECIPE_GATE_M, is compared word RECIPE_GATE_D. See recipe_gate () in src/recipe.c. Only a salt
+// with a single digest has one word to compare, so the others run every step. A candidate that
+// leaves gets that word as its result, which differs from the digest's in every lane.
+
+#ifdef RECIPE_GATE
+
+#define RECIPE_GATE_BIND(S,SALT)                                                        \
+{                                                                                       \
+  (S)->gate_on = ((SALT).digests_cnt == 1) ? 1 : 0;                                     \
+  (S)->gate    = digests_buf[(SALT).digests_offset].digest_buf[RECIPE_GATE_D];          \
+}
+
+#define RECIPE_STATE_GATE     u32 gate; u32 gate_on;
+#define RECIPE_GATE_COPY(D,S) (D).gate = (S)->gate; (D).gate_on = (S)->gate_on;
+
+// The scalar kernels do not include inc_simd.h, and their words are scalar.
+
+#ifdef MATCHES_NONE_VS
+#define RECIPE_GATE_MISS(V,G)   MATCHES_NONE_VS ((V), (G))
+#else
+#define RECIPE_GATE_MISS(V,G)   ((V) != (G))
+#endif
+
+#define RECIPE_GATE_MISS_S(V,G) ((V) != (G))
+
+#define RECIPE_GATE_CHK(K,HS,T)                                                         \
+if (((K) == RECIPE_GATE_STEP) && (st->gate_on == 1))                                    \
+{                                                                                       \
+  const T gv = outs[((K) * 32) + RECIPE_GATE_W] & RECIPE_GATE_M;                        \
+                                                                                        \
+  if (RECIPE_GATE_MISS##HS (gv, st->gate))                                              \
+  {                                                                                     \
+    for (u32 i = 0; i < 4; i++) r[i] = 0;                                               \
+                                                                                        \
+    r[RECIPE_GATE_D] = gv;                                                              \
+                                                                                        \
+    return;                                                                             \
+  }                                                                                     \
+}
+
+#else
+
+#define RECIPE_GATE_BIND(S,SALT)
+#define RECIPE_STATE_GATE
+#define RECIPE_GATE_COPY(D,S)
+
+#endif
+
 // Feed one part into the running hash. U is the plain update and W is the UTF-16LE update. PU and
 // PB are the update and buffer for pass. SU and SB are their salt equivalents. See RECIPE_UPDP_*.
 // Part tokens are PASS, SALT, LIT0 through LIT3, STEP0 through STEP15, their UTF-16LE variants with
@@ -4075,7 +4126,7 @@ DECLSPEC u32 recipe_salt_decode (PRIVATE_AS u32 *out, GLOBAL_AS const u32 *in, c
 #define RECIPE_UPDS_tiger(X) tiger_update##X
 #define RECIPE_SBUF_tiger    s
 #define RECIPE_CTX_tiger(X)  tiger_ctx##X##_t
-#define RECIPE_INIT_tiger(X) tiger_init##X (&ctx, st->tiger, TIGER_PAD_TIGER);
+#define RECIPE_INIT_tiger(X) tiger_init##X (&ctx, st->tiger, TIGER_PAD_TIGER, 3);
 #define RECIPE_HASH_tiger(X,HS,INIT,FEED) RECIPE_HASH_TIGER (X, HS, INIT, FEED)
 #define RECIPE_KS_tiger(HS,V)  (V)
 #define RECIPE_RAW_tiger       RECIPE_RAWG
@@ -4092,7 +4143,7 @@ DECLSPEC u32 recipe_salt_decode (PRIVATE_AS u32 *out, GLOBAL_AS const u32 *in, c
 #define RECIPE_UPDS_tiger128(X) tiger_update##X
 #define RECIPE_SBUF_tiger128    s
 #define RECIPE_CTX_tiger128(X)  tiger_ctx##X##_t
-#define RECIPE_INIT_tiger128(X) tiger_init##X (&ctx, st->tiger, TIGER_PAD_TIGER);
+#define RECIPE_INIT_tiger128(X) tiger_init##X (&ctx, st->tiger, TIGER_PAD_TIGER, 3);
 #define RECIPE_HASH_tiger128(X,HS,INIT,FEED) RECIPE_HASH_TIGER (X, HS, INIT, FEED)
 #define RECIPE_KS_tiger128(HS,V)  (V)
 #define RECIPE_RAW_tiger128       RECIPE_RAWG
@@ -4109,7 +4160,7 @@ DECLSPEC u32 recipe_salt_decode (PRIVATE_AS u32 *out, GLOBAL_AS const u32 *in, c
 #define RECIPE_UPDS_tiger160(X) tiger_update##X
 #define RECIPE_SBUF_tiger160    s
 #define RECIPE_CTX_tiger160(X)  tiger_ctx##X##_t
-#define RECIPE_INIT_tiger160(X) tiger_init##X (&ctx, st->tiger, TIGER_PAD_TIGER);
+#define RECIPE_INIT_tiger160(X) tiger_init##X (&ctx, st->tiger, TIGER_PAD_TIGER, 3);
 #define RECIPE_HASH_tiger160(X,HS,INIT,FEED) RECIPE_HASH_TIGER (X, HS, INIT, FEED)
 #define RECIPE_KS_tiger160(HS,V)  (V)
 #define RECIPE_RAW_tiger160       RECIPE_RAWG
@@ -4126,11 +4177,30 @@ DECLSPEC u32 recipe_salt_decode (PRIVATE_AS u32 *out, GLOBAL_AS const u32 *in, c
 #define RECIPE_UPDS_tiger2(X) tiger_update##X
 #define RECIPE_SBUF_tiger2    s
 #define RECIPE_CTX_tiger2(X)  tiger_ctx##X##_t
-#define RECIPE_INIT_tiger2(X) tiger_init##X (&ctx, st->tiger, TIGER_PAD_TIGER2);
+#define RECIPE_INIT_tiger2(X) tiger_init##X (&ctx, st->tiger, TIGER_PAD_TIGER2, 3);
 #define RECIPE_HASH_tiger2(X,HS,INIT,FEED) RECIPE_HASH_TIGER (X, HS, INIT, FEED)
 #define RECIPE_KS_tiger2(HS,V)  (V)
 #define RECIPE_RAW_tiger2       RECIPE_RAWG
 #define RECIPE_PAD_tiger2       RECIPE_PADG
+
+// tiger192_4 is Tiger with 4 passes, what PHP calls tiger192,4.
+
+#define RECIPE_LEN_tiger192_4    24
+#define RECIPE_BLOCK_tiger192_4  64
+#define RECIPE_UPD_tiger192_4(X)  tiger_update##X
+#define RECIPE_UPDW_tiger192_4(X) tiger_update##X##_utf16le
+#define RECIPE_UPDG_tiger192_4    tiger_update_global
+#define RECIPE_UPDWG_tiger192_4   tiger_update_global_utf16le
+#define RECIPE_UPDP_tiger192_4(X) tiger_update##X
+#define RECIPE_PBUF_tiger192_4    w
+#define RECIPE_UPDS_tiger192_4(X) tiger_update##X
+#define RECIPE_SBUF_tiger192_4    s
+#define RECIPE_CTX_tiger192_4(X)  tiger_ctx##X##_t
+#define RECIPE_INIT_tiger192_4(X) tiger_init##X (&ctx, st->tiger, TIGER_PAD_TIGER, 4);
+#define RECIPE_HASH_tiger192_4(X,HS,INIT,FEED) RECIPE_HASH_TIGER (X, HS, INIT, FEED)
+#define RECIPE_KS_tiger192_4(HS,V)  (V)
+#define RECIPE_RAW_tiger192_4       RECIPE_RAWG
+#define RECIPE_PAD_tiger192_4       RECIPE_PADG
 
 // tth is the Tiger tree hash of one leaf, whose init sets the 0x00 prefix. It has no HMAC form.
 
@@ -4455,6 +4525,73 @@ DECLSPEC u32 recipe_salt_decode (PRIVATE_AS u32 *out, GLOBAL_AS const u32 *in, c
   raw[1] = hc_swap32##HS (ctx.nr2);                                   \
 }
 
+// xxh64 and xxh32 use inc_hash_xxhash.cl, see RECIPE_XXHASH. They take bytes in memory order and
+// write the digest big endian, as the canonical form of xxHash does. A call without a seed starts
+// from seed 0, and a call with one is a SEED step, see RECIPE_STEP_SEED. They have no HMAC form and
+// no utf16le update.
+
+// The type of a seed, so that a call without one can pass 0 in the word type of its context.
+
+#define RECIPE_XXH64_T        u64
+#define RECIPE_XXH64_T_vector u64x
+#define RECIPE_XXH32_T        u32
+#define RECIPE_XXH32_T_vector u32x
+
+#define RECIPE_LEN_xxh64    8
+#define RECIPE_BLOCK_xxh64  32
+#define RECIPE_UPD_xxh64(X)  xxh64_update##X
+#define RECIPE_UPDW_xxh64(X) recipe_no_utf16_xxhash
+#define RECIPE_UPDG_xxh64    xxh64_update_global
+#define RECIPE_UPDWG_xxh64   recipe_no_utf16_xxhash
+#define RECIPE_UPDP_xxh64(X) xxh64_update##X
+#define RECIPE_PBUF_xxh64    w
+#define RECIPE_UPDS_xxh64(X) xxh64_update##X
+#define RECIPE_SBUF_xxh64    s
+#define RECIPE_CTX_xxh64(X)  xxh64_ctx##X##_t
+#define RECIPE_INIT_xxh64(X) xxh64_init##X (&ctx, (RECIPE_XXH64_T##X) 0);
+#define RECIPE_KS_xxh64(HS,V)  (V)
+
+#define RECIPE_HASH_xxh64(X,HS,INIT,FEED)                             \
+{                                                                     \
+  xxh64_ctx##X##_t ctx;                                               \
+                                                                      \
+  INIT                                                                \
+                                                                      \
+  FEED                                                                \
+                                                                      \
+  xxh64_final##X (&ctx);                                              \
+                                                                      \
+  raw[0] = hc_swap32##HS (h32_from_64##HS (ctx.h));                   \
+  raw[1] = hc_swap32##HS (l32_from_64##HS (ctx.h));                   \
+}
+
+#define RECIPE_LEN_xxh32    4
+#define RECIPE_BLOCK_xxh32  16
+#define RECIPE_UPD_xxh32(X)  xxh32_update##X
+#define RECIPE_UPDW_xxh32(X) recipe_no_utf16_xxhash
+#define RECIPE_UPDG_xxh32    xxh32_update_global
+#define RECIPE_UPDWG_xxh32   recipe_no_utf16_xxhash
+#define RECIPE_UPDP_xxh32(X) xxh32_update##X
+#define RECIPE_PBUF_xxh32    w
+#define RECIPE_UPDS_xxh32(X) xxh32_update##X
+#define RECIPE_SBUF_xxh32    s
+#define RECIPE_CTX_xxh32(X)  xxh32_ctx##X##_t
+#define RECIPE_INIT_xxh32(X) xxh32_init##X (&ctx, (RECIPE_XXH32_T##X) 0);
+#define RECIPE_KS_xxh32(HS,V)  (V)
+
+#define RECIPE_HASH_xxh32(X,HS,INIT,FEED)                             \
+{                                                                     \
+  xxh32_ctx##X##_t ctx;                                               \
+                                                                      \
+  INIT                                                                \
+                                                                      \
+  FEED                                                                \
+                                                                      \
+  xxh32_final##X (&ctx);                                              \
+                                                                      \
+  raw[0] = hc_swap32##HS (ctx.h);                                     \
+}
+
 // lm and mdc2 use inc_hash_lm.cl and inc_hash_mdc2.cl with the DES tables, see RECIPE_DES. Both
 // take bytes in memory order and return little endian words. They have no hmac_ form: lm keeps only
 // 14 bytes of its input, and the block of mdc2 is shorter than its digest.
@@ -4681,6 +4818,66 @@ DECLSPEC u32 recipe_salt_decode (PRIVATE_AS u32 *out, GLOBAL_AS const u32 *in, c
 #define RECIPE_KLEN2(X) RECIPE_KLEN_##X
 #define RECIPE_KLEN(X)  RECIPE_KLEN2 (X)
 
+// A SEED step is a call such as xxh64 (pass, salt). Its key part holds the seed, read as a big
+// endian number from its first 8 bytes, or 4 for xxh32, the way the hex of the seed reads. A
+// shorter key gives a smaller number. The step then hashes its parts as a HASH step does.
+
+#ifdef RECIPE_XXHASH
+
+DECLSPEC u64 recipe_seed64_S (PRIVATE_AS const u32 *buf, const u32 len)
+{
+  u64 seed = 0;
+
+  const u32 cnt = (len < 8) ? len : 8;
+
+  for (u32 i = 0; i < cnt; i++) seed = (seed << 8) | ((buf[i / 4] >> ((i & 3) * 8)) & 0xff);
+
+  return seed;
+}
+
+DECLSPEC u32 recipe_seed32_S (PRIVATE_AS const u32 *buf, const u32 len)
+{
+  u32 seed = 0;
+
+  const u32 cnt = (len < 4) ? len : 4;
+
+  for (u32 i = 0; i < cnt; i++) seed = (seed << 8) | ((buf[i / 4] >> ((i & 3) * 8)) & 0xff);
+
+  return seed;
+}
+
+DECLSPEC u64x recipe_seed64 (PRIVATE_AS const u32x *buf, const u32 len)
+{
+  u64x seed = 0;
+
+  const u32 cnt = (len < 8) ? len : 8;
+
+  for (u32 i = 0; i < cnt; i++) seed = (seed << 8) | hl32_to_64 (make_u32x (0), (buf[i / 4] >> ((i & 3) * 8)) & 0xff);
+
+  return seed;
+}
+
+DECLSPEC u32x recipe_seed32 (PRIVATE_AS const u32x *buf, const u32 len)
+{
+  u32x seed = 0;
+
+  const u32 cnt = (len < 4) ? len : 4;
+
+  for (u32 i = 0; i < cnt; i++) seed = (seed << 8) | ((buf[i / 4] >> ((i & 3) * 8)) & 0xff);
+
+  return seed;
+}
+
+#endif
+
+#define RECIPE_SEED_xxh64(X,HS,KEY) xxh64_init##X (&ctx, recipe_seed64##HS (RECIPE_KBUF (KEY), (u32) RECIPE_KLEN (KEY)));
+#define RECIPE_SEED_xxh32(X,HS,KEY) xxh32_init##X (&ctx, recipe_seed32##HS (RECIPE_KBUF (KEY), (u32) RECIPE_KLEN (KEY)));
+
+#define RECIPE_SEED3(F,X,HS,KEY) RECIPE_SEED_##F (X, HS, KEY)
+#define RECIPE_SEED2(F,X,HS,KEY) RECIPE_SEED3 (F, X, HS, KEY)
+
+#define RECIPE_STEP_SEED(F,K,X,HS,T,INIT) RECIPE_STEP_HASHF (F, K, X, HS, T, RECIPE_SEED2 (F, X, HS, RECIPE_S##K##_KEY), RECIPE_FEED (K, F, X))
+
 // XOR the HMAC key block with the pad, then feed it as one block of register words through the
 // family's block update, as the hash includes' HMAC helpers do. KS converts little endian key
 // words to the order required by that block update.
@@ -4847,6 +5044,7 @@ DECLSPEC u32 recipe_salt_decode (PRIVATE_AS u32 *out, GLOBAL_AS const u32 *in, c
 #define RECIPE_KW_tiger128(HS,R,I,LEN)    (R)[I]
 #define RECIPE_KW_tiger160(HS,R,I,LEN)    (R)[I]
 #define RECIPE_KW_tiger2(HS,R,I,LEN)      (R)[I]
+#define RECIPE_KW_tiger192_4(HS,R,I,LEN)  (R)[I]
 #define RECIPE_KW_tth(HS,R,I,LEN)         (R)[I]
 #define RECIPE_KW_hav128(HS,R,I,LEN)      (R)[I]
 #define RECIPE_KW_hav128_4(HS,R,I,LEN)    (R)[I]
@@ -5857,6 +6055,7 @@ DECLSPEC int recipe_utf16le_S (PRIVATE_AS const u32 *src, const int len, PRIVATE
 #define RECIPE_EVB3(B,P,D,F,K,X,HS,T) RECIPE_EVB_##B (P, D, F, K, X, HS, T)
 #define RECIPE_EVB2(B,P,D,F,K,X,HS,T) RECIPE_EVB3 (B, P, D, F, K, X, HS, T)
 #define RECIPE_EVB(K,X,HS,T)          RECIPE_EVB2 (RECIPE_S##K##_BW, RECIPE_S##K##_PH, RECIPE_S##K##_KIND, RECIPE_S##K##_FN, K, X, HS, T)
+#define RECIPE_EVBG(K,X,HS,T)         RECIPE_EVB (K, X, HS, T) RECIPE_GATE_CHK (K, HS, T)
 
 #define RECIPE_BFLD_0(F,K)
 #define RECIPE_BFLD_1(F,K)  RECIPE_CTX_##F ( ) bc##K;
@@ -5957,6 +6156,7 @@ DECLSPEC int recipe_utf16le_S (PRIVATE_AS const u32 *src, const int len, PRIVATE
   RECIPE_STATE_SB (T)              \
   RECIPE_STATE_SD (T)              \
   RECIPE_STATE_FDS (T)             \
+  RECIPE_STATE_GATE                \
   RECIPE_XFLDS (T)
 
 typedef struct recipe_state_vector
@@ -6104,6 +6304,10 @@ typedef struct recipe_state_scalar
 #define RECIPE_NAT_sha384(HS)     RECIPE_NAT_BE64 (12, HS)
 #define RECIPE_NAT_sha512(HS)     RECIPE_NAT_BE64 (16, HS)
 
+// MD6-256 is hash-mode 34600, whose optimized kernels keep the digest as 64-bit big endian words.
+
+#define RECIPE_NAT_md6256(HS)     RECIPE_NAT_BE64 ( 8, HS)
+
 // SHA-3, Keccak, Streebog, GOST R 34.11-94 and RIPEMD-320 modes keep their digest in memory order.
 // The 224-bit SHA-3 and Keccak modes compare word 7, which their digest holds as zero.
 
@@ -6121,6 +6325,104 @@ typedef struct recipe_state_scalar
 #define RECIPE_NAT_streebog_64(HS) RECIPE_NAT_LE    (16, HS)
 #define RECIPE_NAT_gost(HS)        RECIPE_NAT_LE    ( 8, HS)
 #define RECIPE_NAT_rmd320(HS)      RECIPE_NAT_LE    (10, HS)
+
+// The raw hash-modes from 40084 on keep their digest in memory order too, a 224-bit one with word 7
+// zeroed as above.
+
+#define RECIPE_NAT_md2(HS)             RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_sha0(HS)            RECIPE_NAT_LE    ( 5, HS)
+#define RECIPE_NAT_rmd128(HS)          RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_rmd256(HS)          RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_gost_crypto(HS)     RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_tiger(HS)           RECIPE_NAT_LE    ( 6, HS)
+#define RECIPE_NAT_tiger128(HS)        RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_tiger160(HS)        RECIPE_NAT_LE    ( 5, HS)
+#define RECIPE_NAT_tiger2(HS)          RECIPE_NAT_LE    ( 6, HS)
+#define RECIPE_NAT_tiger192_4(HS)      RECIPE_NAT_LE    ( 6, HS)
+#define RECIPE_NAT_tth(HS)             RECIPE_NAT_LE    ( 6, HS)
+#define RECIPE_NAT_sne128(HS)          RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_sne256(HS)          RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_skein224(HS)        RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_skein256(HS)        RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_skein384(HS)        RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_skein512(HS)        RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_panama(HS)          RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_mdc2(HS)            RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_hav128(HS)          RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_hav128_4(HS)        RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_hav128_5(HS)        RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_hav160_3(HS)        RECIPE_NAT_LE    ( 5, HS)
+#define RECIPE_NAT_hav160_4(HS)        RECIPE_NAT_LE    ( 5, HS)
+#define RECIPE_NAT_hav160_5(HS)        RECIPE_NAT_LE    ( 5, HS)
+#define RECIPE_NAT_hav192_3(HS)        RECIPE_NAT_LE    ( 6, HS)
+#define RECIPE_NAT_hav192_4(HS)        RECIPE_NAT_LE    ( 6, HS)
+#define RECIPE_NAT_hav192_5(HS)        RECIPE_NAT_LE    ( 6, HS)
+#define RECIPE_NAT_hav224_3(HS)        RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_hav224_4(HS)        RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_hav224_5(HS)        RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_hav256(HS)          RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_hav256_4(HS)        RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_hav256_5(HS)        RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_blake224(HS)        RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_blake256(HS)        RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_blake384(HS)        RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_blake512(HS)        RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_bmw224(HS)          RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_bmw256(HS)          RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_bmw384(HS)          RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_bmw512(HS)          RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_cube224(HS)         RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_cube256(HS)         RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_cube384(HS)         RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_cube512(HS)         RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_echo224(HS)         RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_echo256(HS)         RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_echo384(HS)         RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_echo512(HS)         RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_fugue224(HS)        RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_fugue256(HS)        RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_fugue384(HS)        RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_fugue512(HS)        RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_groestl224(HS)      RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_groestl256(HS)      RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_groestl384(HS)      RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_groestl512(HS)      RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_hamsi224(HS)        RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_hamsi256(HS)        RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_hamsi384(HS)        RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_hamsi512(HS)        RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_jh224(HS)           RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_jh256(HS)           RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_jh384(HS)           RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_jh512(HS)           RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_luffa224(HS)        RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_luffa256(HS)        RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_luffa384(HS)        RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_luffa512(HS)        RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_shabal224(HS)       RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_shabal256(HS)       RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_shabal384(HS)       RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_shabal512(HS)       RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_shavite224(HS)      RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_shavite256(HS)      RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_shavite384(HS)      RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_shavite512(HS)      RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_simd224(HS)         RECIPE_NAT_LE224 (HS)
+#define RECIPE_NAT_simd256(HS)         RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_simd384(HS)         RECIPE_NAT_LE    (12, HS)
+#define RECIPE_NAT_simd512(HS)         RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_has160(HS)          RECIPE_NAT_LE    ( 5, HS)
+#define RECIPE_NAT_edon256(HS)         RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_edon512(HS)         RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_md6(HS)             RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_md6512(HS)          RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_radiogatun32(HS)    RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_radiogatun64(HS)    RECIPE_NAT_LE    ( 8, HS)
+#define RECIPE_NAT_ripemd(HS)          RECIPE_NAT_LE    ( 4, HS)
+#define RECIPE_NAT_wrl0(HS)            RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_wrl1(HS)            RECIPE_NAT_LE    (16, HS)
+#define RECIPE_NAT_xxh64(HS)           RECIPE_NAT_BE64  ( 2, HS)
+#define RECIPE_NAT_xxh32(HS)           RECIPE_NAT_BE    ( 1, HS)
 
 // The result of xor, and or or belongs to no family and keeps its bytes in memory order. It can be
 // up to 64 bytes long, and its step zeroes raw past its length.
@@ -6238,7 +6540,12 @@ typedef struct recipe_state_scalar
 // 16-word r buffer. The pouts array holds the outputs recipe_prep () computed, and outs holds the
 // candidate's outputs.
 
+#ifdef RECIPE_GATE
+#define RECIPE_EVG(K,X,HS,T)  RECIPE_EV (K, X, HS, T) RECIPE_GATE_CHK (K, HS, T)
+#define RECIPE_EVAL(X,HS,T,M) RECIPE_EVALR (X, HS, T, M, RECIPE_EVG)
+#else
 #define RECIPE_EVAL(X,HS,T,M) RECIPE_EVALR (X, HS, T, M, RECIPE_EV)
+#endif
 
 #define RECIPE_EVALR(X,HS,T,M,R) RECIPE_EVALS (X, HS, T, M, R, RECIPE_ROOT (HS))
 
@@ -6428,7 +6735,11 @@ DECLSPEC RECIPE_INLINE void recipe_base (PRIVATE_AS const recipe_state_t *st, PR
 
 DECLSPEC RECIPE_INLINE void recipe_eval_base (PRIVATE_AS const recipe_state_t *st, PRIVATE_AS const recipe_base_t *bst, PRIVATE_AS const u32 *w, const u32 pw_len, GLOBAL_AS const u32 *tail, const u32 tail_len, PRIVATE_AS const u32 *s, const u32 salt_len, PRIVATE_AS u32 *r)
 {
+  #ifdef RECIPE_GATE
+  RECIPE_EVALR ( , _S, u32, , RECIPE_EVBG)
+  #else
   RECIPE_EVALR ( , _S, u32, , RECIPE_EVB)
+  #endif
 }
 
 #define RECIPE_BASE(B,ST,W,LEN)                          recipe_base_t B; recipe_base (ST, &B, W, LEN);
@@ -6486,6 +6797,7 @@ DECLSPEC void recipe_eval_lanes (PRIVATE_AS const recipe_state_t *st, PRIVATE_AS
   RECIPE_FUGUE_COPY (sts, st)
   RECIPE_GROESTL_COPY (sts, st)
   RECIPE_WRL01_COPY (sts, st)
+  RECIPE_GATE_COPY (sts, st)
 
   #ifdef RECIPE_SALT_DEC
   for (u32 i = 0; i < 64; i++) sts.sd[i] = 0;

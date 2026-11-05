@@ -218,11 +218,22 @@ DECLSPEC void zlib_memset (PRIVATE_AS u8 *s, const u8 c, int len)
 #define TINFL_LZ_DICT_SIZE 32768
 
 // hashcat-patched/hashcat-specific:
+//
+// m_dict is only read by mz_inflate (). A kernel that drives the decoder through hc_inflate ()
+// never reaches it, because TINFL_FLAG_FLUSH_WINDOW makes the caller's output buffer the window,
+// so that kernel can ask for the one byte dictionary and keep the state small. CRC32_IN_INFLATE
+// does that and also moves the input to global memory, since the PKZIP modes decrypt it as they
+// read it. INFLATE_SMALL_DICT is the same saving for a kernel whose input is already private and
+// needs no decryption.
 #ifdef CRC32_IN_INFLATE
 #define M_DICT_SIZE 1
 #define MAYBE_GLOBAL GLOBAL_AS
 #else
+#ifdef INFLATE_SMALL_DICT
+#define M_DICT_SIZE 1
+#else
 #define M_DICT_SIZE TINFL_LZ_DICT_SIZE
+#endif
 #define MAYBE_GLOBAL PRIVATE_AS
 #endif
 
@@ -691,7 +702,16 @@ DECLSPEC HC_NOINLINE_ALWAYS tinfl_status tinfl_decompress (PRIVATE_AS tinfl_deco
     mz_uint wrapped = (decomp_flags & (TINFL_FLAG_FLUSH_WINDOW | TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF)) ? 0 : 1;
 
     /* Ensure the output buffer's size is a power of 2, unless the output buffer is large enough to hold the entire output file (in which case it doesn't matter). */
-    if (((out_buf_size_mask + 1) & out_buf_size_mask) || (pOut_buf_next < pOut_buf_start))
+
+    // hashcat-patched: the test runs on the low 32 bits, which hold every window size a caller here
+    // passes. On 64 bits LLVM folds it into a 64-bit popcount, and Intel's GPU compiler emits no
+    // instruction for that popcount on a device without 64-bit integer support. On an Arc A770 the
+    // test then read a stale register and rejected a valid window, and 17200, 17220 and 21800 could
+    // not crack there.
+
+    const mz_uint32 out_buf_size_lo = (mz_uint32) (out_buf_size_mask + 1);
+
+    if ((out_buf_size_lo & (out_buf_size_lo - 1)) || (pOut_buf_next < pOut_buf_start))
     {
         *pIn_buf_size = *pOut_buf_size = 0;
         return TINFL_STATUS_BAD_PARAM;

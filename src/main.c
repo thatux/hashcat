@@ -19,6 +19,7 @@
 #include "timer.h"
 #include "thread.h"
 #include "status.h"
+#include "status_rc.h"
 #include "shared.h"
 #include "mpsp.h"
 #include "system.h"
@@ -316,6 +317,41 @@ static void main_log_error (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE_UNUSE
   main_log (hashcat_ctx, stderr, LOGLEVEL_ERROR);
 }
 
+// One line that says who has to act, under the error that says what went wrong. It is for a person at
+// a terminal. A wrapper reads the exit code, and to one reading stderr the line would be a second
+// error, or a write to a pipe it has already closed after the first.
+
+static void main_error_banner (hashcat_ctx_t *hashcat_ctx, const int rc_final, const bool quiet)
+{
+  if (quiet == true) return;
+
+  if (is_stderr_terminal () == false) return;
+
+  const char *what = NULL;
+
+  // -5, -10 and -11 can come from kernel or module bugs, so they get no label.
+
+  switch (rc_final)
+  {
+    case RC_FINAL_ERROR_COMMAND:      what = "attack command (flags)"; break;
+    case RC_FINAL_ERROR_TASK:         what = "task";                   break;
+    case RC_FINAL_ERROR_BRIDGE:       what = "bridge (plugin)";        break;
+    case RC_FINAL_ERROR_RUNTIME_SKIP:
+    case RC_FINAL_ERROR_MEMORY_HIT:
+    case RC_FINAL_ERROR_KERNELCREATE:
+    case RC_FINAL_ERROR_EXTRA_SIZE:
+    case RC_FINAL_ERROR_MIXED:        what = "backend";                break;
+  }
+
+  if (what == NULL) return;
+
+  // what was written to stdout before belongs above this line
+
+  fflush (stdout);
+
+  event_log_error (hashcat_ctx, "The cause is in the %s.", what);
+}
+
 static void main_outerloop_starting (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE_UNUSED const void *buf, MAYBE_UNUSED const size_t len)
 {
   const user_options_t       *user_options       = hashcat_ctx->user_options;
@@ -592,6 +628,24 @@ static void main_potfile_remove_parse_post (MAYBE_UNUSED hashcat_ctx_t *hashcat_
   event_log_info_nn (hashcat_ctx, "Compared hashes with potfile entries");
 }
 
+static void main_outcheck_preflight_pre (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE_UNUSED const void *buf, MAYBE_UNUSED const size_t len)
+{
+  const user_options_t *user_options = hashcat_ctx->user_options;
+
+  if (user_options->quiet == true) return;
+
+  event_log_info_nn (hashcat_ctx, "Comparing hashes with outfile check directory. Please be patient...");
+}
+
+static void main_outcheck_preflight_post (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE_UNUSED const void *buf, MAYBE_UNUSED const size_t len)
+{
+  const user_options_t *user_options = hashcat_ctx->user_options;
+
+  if (user_options->quiet == true) return;
+
+  event_log_info_nn (hashcat_ctx, "Compared hashes with outfile check directory");
+}
+
 static void main_rulesfiles_parse_pre (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE_UNUSED const void *buf, MAYBE_UNUSED const size_t len)
 {
   const user_options_t *user_options = hashcat_ctx->user_options;
@@ -655,6 +709,17 @@ static void main_potfile_num_cracked (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, M
   else if (hashes->digests_done_pot > 1)
   {
     event_log_info (hashcat_ctx, "INFO: Removed %d hashes found as potfile entries.", hashes->digests_done_pot);
+    event_log_info (hashcat_ctx, NULL);
+  }
+
+  if (hashes->digests_done_outcheck == 1)
+  {
+    event_log_info (hashcat_ctx, "INFO: Removed hash found in the outfile check directory.");
+    event_log_info (hashcat_ctx, NULL);
+  }
+  else if (hashes->digests_done_outcheck > 1)
+  {
+    event_log_info (hashcat_ctx, "INFO: Removed %d hashes found in the outfile check directory.", hashes->digests_done_outcheck);
     event_log_info (hashcat_ctx, NULL);
   }
 }
@@ -737,6 +802,23 @@ static void main_outerloop_mainscreen (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, 
   if (user_options->quiet == true) return;
 
   event_log_info (hashcat_ctx, "Hashes: %u digests; %u unique digests, %u unique salts", hashes->hashes_cnt_orig, hashes->digests_cnt, hashes->salts_cnt);
+
+  if (hashes->combined_salts_cnt > 0)
+  {
+    const char *with = (hashes->combined_salts_cnt == 1) ? "it" : "them";
+
+    char salt_lens[32];
+    char pw_lens[32];
+
+    if (hashes->combined_salt_len_min == hashes->combined_salt_len_max) snprintf (salt_lens, sizeof (salt_lens), "%u", hashes->combined_salt_len_max);
+    else snprintf (salt_lens, sizeof (salt_lens), "%u to %u", hashes->combined_salt_len_min, hashes->combined_salt_len_max);
+
+    if (hashes->combined_pw_len_min == hashes->combined_pw_len_max) snprintf (pw_lens, sizeof (pw_lens), "%u", hashes->combined_pw_len_max);
+    else snprintf (pw_lens, sizeof (pw_lens), "%u to %u", hashes->combined_pw_len_min, hashes->combined_pw_len_max);
+
+    event_log_info (hashcat_ctx, "Salts: %s bytes of the shared buffer, the kernel cracks passwords up to %s bytes long with %s", salt_lens, pw_lens, with);
+  }
+
   event_log_info (hashcat_ctx, "Bitmaps: %u bits, %u entries, 0x%08x mask, %u bytes", bitmap_ctx->bitmap_bits, bitmap_ctx->bitmap_nums, bitmap_ctx->bitmap_mask, bitmap_ctx->bitmap_size);
 
   if ((user_options->attack_mode == ATTACK_MODE_STRAIGHT) || (user_options->attack_mode == ATTACK_MODE_GENERIC) || (user_options->attack_mode == ATTACK_MODE_ASSOCIATION))
@@ -770,6 +852,29 @@ static void main_outerloop_mainscreen (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, 
       event_log_advice (hashcat_ctx, "See the above message to find out about the exact limits.");
       event_log_advice (hashcat_ctx, NULL);
     }
+  }
+
+  if (hashes->combined_salts_short > 0)
+  {
+    event_log_advice (hashcat_ctx, "ATTENTION! Password and salt share a buffer in this kernel.");
+    event_log_advice (hashcat_ctx, "%u of %u salts leave less room than the maximum password length of %u.", hashes->combined_salts_short, hashes->combined_salts_cnt, hashconfig->pw_max);
+    event_log_advice (hashcat_ctx, "The longest one leaves %u, so longer candidates cannot crack its hashes.", hashes->combined_pw_len_min);
+
+    // A mode with a recipe runs the recipe's pure kernels without -O, which has_pure_kernel does not
+    // count because it probes for the mode's own.
+
+    const bool pure_available = (hashconfig->has_pure_kernel == true) || (module_ctx->module_hash_recipe != MODULE_DEFAULT);
+
+    if (pure_available == true)
+    {
+      event_log_advice (hashcat_ctx, "Remove -O to lift this limit, the pure kernel has none.");
+    }
+    else
+    {
+      event_log_advice (hashcat_ctx, "This hash-mode has no pure kernel without this limit.");
+    }
+
+    event_log_advice (hashcat_ctx, NULL);
   }
 
   if (mask_is_feed (user_options) == true)
@@ -1294,6 +1399,11 @@ static void main_hashconfig_post (MAYBE_UNUSED hashcat_ctx_t *hashcat_ctx, MAYBE
       event_log_info (hashcat_ctx, "Minimum salt length supported by kernel: %u", hashconfig->salt_min);
       event_log_info (hashcat_ctx, "Maximum salt length supported by kernel: %u", hashconfig->salt_max);
     }
+
+    if (hashconfig->combined_len_max > 0)
+    {
+      event_log_info (hashcat_ctx, "Maximum combined password and salt length supported by kernel: %u", hashconfig->combined_len_max);
+    }
   }
 
   event_log_info (hashcat_ctx, NULL);
@@ -1580,6 +1690,7 @@ typedef enum main_timing_stage
   MAIN_TIMING_SALT_SORT,
   MAIN_TIMING_HASH_UNIQUE,
   MAIN_TIMING_POTFILE,
+  MAIN_TIMING_OUTCHECK,
   MAIN_TIMING_CANDIDATE_SOURCE,
   MAIN_TIMING_RULES,
   MAIN_TIMING_BITMAP,
@@ -1676,6 +1787,8 @@ static void main_timing_event (const u32 id)
     case EVENT_HASHLIST_UNIQUE_HASH_POST:  main_timing_stop  (MAIN_TIMING_HASH_UNIQUE);      break;
     case EVENT_POTFILE_REMOVE_PARSE_PRE:   main_timing_start (MAIN_TIMING_POTFILE);          break;
     case EVENT_POTFILE_REMOVE_PARSE_POST:  main_timing_stop  (MAIN_TIMING_POTFILE);          break;
+    case EVENT_OUTCHECK_PREFLIGHT_PRE:     main_timing_start (MAIN_TIMING_OUTCHECK);         break;
+    case EVENT_OUTCHECK_PREFLIGHT_POST:    main_timing_stop  (MAIN_TIMING_OUTCHECK);         break;
     case EVENT_CANDIDATE_SOURCE_PRE:       main_timing_start (MAIN_TIMING_CANDIDATE_SOURCE); break;
     case EVENT_CANDIDATE_SOURCE_POST:      main_timing_stop  (MAIN_TIMING_CANDIDATE_SOURCE); break;
     case EVENT_RULESFILES_PARSE_PRE:       main_timing_start (MAIN_TIMING_RULES);            break;
@@ -1812,6 +1925,7 @@ static void main_timing_report (hashcat_ctx_t *hashcat_ctx, const bool enabled, 
                            + main_timing_msec (MAIN_TIMING_SALT_SORT)
                            + main_timing_msec (MAIN_TIMING_HASH_UNIQUE)
                            + main_timing_msec (MAIN_TIMING_POTFILE)
+                           + main_timing_msec (MAIN_TIMING_OUTCHECK)
                            + main_timing_msec (MAIN_TIMING_CANDIDATE_SOURCE)
                            + main_timing_msec (MAIN_TIMING_BITMAP)
                            + main_timing_msec (MAIN_TIMING_BRIDGE_SALTS)
@@ -1862,6 +1976,7 @@ static void main_timing_report (hashcat_ctx_t *hashcat_ctx, const bool enabled, 
   main_timing_detail_line (hashcat_ctx, "Sort salts", MAIN_TIMING_SALT_SORT, total, 4);
   main_timing_detail_line (hashcat_ctx, "Remove duplicate hashes", MAIN_TIMING_HASH_UNIQUE, total, 4);
   main_timing_detail_line (hashcat_ctx, "Check potfile", MAIN_TIMING_POTFILE, total, 4);
+  main_timing_detail_line (hashcat_ctx, "Check outfile check directory", MAIN_TIMING_OUTCHECK, total, 4);
 
   if (main_timing_profile.entries[MAIN_TIMING_CANDIDATE_SOURCE].calls > 0)
   {
@@ -1980,6 +2095,8 @@ static void event (const u32 id, hashcat_ctx_t *hashcat_ctx, const void *buf, co
     case EVENT_BACKEND_SESSION_HOSTMEM:   main_backend_session_hostmem   (hashcat_ctx, buf, len); break;
     case EVENT_BACKEND_DEVICE_INIT_POST:  main_backend_device_init_post  (hashcat_ctx, buf, len); break;
     case EVENT_BACKEND_DEVICE_INIT_PRE:   main_backend_device_init_pre   (hashcat_ctx, buf, len); break;
+    case EVENT_OUTCHECK_PREFLIGHT_POST:   main_outcheck_preflight_post   (hashcat_ctx, buf, len); break;
+    case EVENT_OUTCHECK_PREFLIGHT_PRE:    main_outcheck_preflight_pre    (hashcat_ctx, buf, len); break;
     case EVENT_OUTERLOOP_FINISHED:        main_outerloop_finished        (hashcat_ctx, buf, len); break;
     case EVENT_OUTERLOOP_MAINSCREEN:      main_outerloop_mainscreen      (hashcat_ctx, buf, len); break;
     case EVENT_OUTERLOOP_STARTING:        main_outerloop_starting        (hashcat_ctx, buf, len); break;
@@ -2064,26 +2181,32 @@ int main (int argc, char **argv)
 
   // parse commandline parameters and check them
 
+  // getopt and sanity reject a wrong command line, so they exit with -2
+
   if (user_options_getopt (hashcat_ctx, argc, argv) == -1)
   {
+    main_error_banner (hashcat_ctx, RC_FINAL_ERROR_COMMAND, hashcat_ctx->user_options->quiet);
+
     user_options_destroy (hashcat_ctx);
 
     hashcat_destroy (hashcat_ctx);
 
     hcfree (hashcat_ctx);
 
-    return -1;
+    return RC_FINAL_ERROR_COMMAND;
   }
 
   if (user_options_sanity (hashcat_ctx) == -1)
   {
+    main_error_banner (hashcat_ctx, RC_FINAL_ERROR_COMMAND, hashcat_ctx->user_options->quiet);
+
     user_options_destroy (hashcat_ctx);
 
     hashcat_destroy (hashcat_ctx);
 
     hcfree (hashcat_ctx);
 
-    return -1;
+    return RC_FINAL_ERROR_COMMAND;
   }
 
   // some early exits
@@ -2196,6 +2319,29 @@ int main (int argc, char **argv)
     }
   }
 
+  // A wrong attack command exits -2, an unusable task -12 and a failed bridge -13, so a caller can tell them apart
+  // from the generic -1. Most sites surface as -1, but the restore-value check aborts through
+  // myabort, which reports 2, so that code is refined here too. Read before hashcat_session_destroy,
+  // while status_ctx is still valid.
+
+  const rc_final_t rc_error = status_get_rc_error (hashcat_ctx);
+
+  // A bridge failure that did not end the run, such as one only autotune saw, does not turn a later
+  // quit into an error.
+
+  const bool refine_abort = (rc_final == RC_FINAL_ABORT) && (rc_error != RC_FINAL_ERROR_BRIDGE);
+
+  if (((rc_final == RC_FINAL_ERROR) || (refine_abort == true)) && (rc_error != RC_FINAL_OK)) rc_final = rc_error;
+
+  // A bridge failure during autotune or the self-test says nothing about the kernel.
+
+  if (((rc_final == RC_FINAL_ERROR_AUTOTUNE) || (rc_final == RC_FINAL_ERROR_SELFTEST)) && (rc_error == RC_FINAL_ERROR_BRIDGE)) rc_final = RC_FINAL_ERROR_BRIDGE;
+
+  // the session teardown below can still log an error, which belongs above the banner, and it takes
+  // user_options with it
+
+  const bool quiet = user_options->quiet;
+
   // finish the hashcat session, this shuts down backend devices, hwmon, etc
 
   main_timing_start (MAIN_TIMING_SESSION_DESTROY);
@@ -2203,6 +2349,8 @@ int main (int argc, char **argv)
   hashcat_session_destroy (hashcat_ctx);
 
   main_timing_stop (MAIN_TIMING_SESSION_DESTROY);
+
+  main_error_banner (hashcat_ctx, rc_final, quiet);
 
   // finished with hashcat, clean up
 

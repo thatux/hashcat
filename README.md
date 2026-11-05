@@ -47,7 +47,7 @@ Tests:
 
 Build | BSD | Rust | Test | Fuzz
 ----- | --- | ---- | ---- | ----
-[![Build](https://github.com/hashcat/hashcat/actions/workflows/build.yml/badge.svg)](https://github.com/hashcat/hashcat/actions/workflows/build.yml) | [![BSD](https://github.com/hashcat/hashcat/actions/workflows/bsd.yml/badge.svg)](https://github.com/hashcat/hashcat/actions/workflows/bsd.yml) | [![Rust tests](https://github.com/hashcat/hashcat/actions/workflows/rust.yml/badge.svg)](https://github.com/hashcat/hashcat/actions/workflows/rust.yml) | [![test](https://github.com/hashcat/hashcat/actions/workflows/test.yml/badge.svg)](https://github.com/hashcat/hashcat/actions/workflows/test.yml) | [![fuzz](https://github.com/hashcat/hashcat/actions/workflows/fuzz.yml/badge.svg)](https://github.com/hashcat/hashcat/actions/workflows/fuzz.yml)
+[![Build](https://github.com/hashcat/hashcat/actions/workflows/build.yml/badge.svg?branch=master&event=push)](https://github.com/hashcat/hashcat/actions/workflows/build.yml) | [![BSD](https://github.com/hashcat/hashcat/actions/workflows/bsd.yml/badge.svg?branch=master&event=schedule)](https://github.com/hashcat/hashcat/actions/workflows/bsd.yml) | [![Rust tests](https://github.com/hashcat/hashcat/actions/workflows/rust.yml/badge.svg?branch=master&event=push)](https://github.com/hashcat/hashcat/actions/workflows/rust.yml) | [![test](https://github.com/hashcat/hashcat/actions/workflows/test.yml/badge.svg?branch=master&event=schedule)](https://github.com/hashcat/hashcat/actions/workflows/test.yml) | [![fuzz](https://github.com/hashcat/hashcat/actions/workflows/fuzz.yml/badge.svg?branch=master&event=schedule)](https://github.com/hashcat/hashcat/actions/workflows/fuzz.yml)
 
 ### Usage and help ###
 
@@ -62,9 +62,10 @@ The [docs](docs/) directory covers each feature. The ones people ask about most:
 * [Hash recipes](docs/hashcat-hash-recipe.md), for cracking a custom hash scheme without writing a hash mode
 * [Plugin development guide](docs/hashcat-plugin-development-guide.md), for adding a hash mode
 * [Assimilation bridge](docs/hashcat-assimilation-bridge.md), and its [Python](docs/hashcat-python-plugin-quickstart.md) and [Rust](docs/hashcat-rust-plugin-quickstart.md) quickstarts
+* [FPGA setup](docs/hashcat-fpga-setup.md), for running bcrypt on FPGA boards with mode 75000
 * [Generic attack mode](docs/hashcat-generic-attack-mode.md), [PCFG](docs/hashcat-pcfg.md), [table](docs/hashcat-table.md) and [association](docs/hashcat-association.md) attacks
 * [Brain](docs/hashcat-brain.md), for skipping candidates an earlier session already tried
-* [Release notes for v7.1.0](docs/releases_notes_v7.1.0.md), and the full [changelog](docs/changes.txt)
+* [Release notes for v8.0.0](docs/releases_notes_v8.0.0.md), and the full [changelog](docs/changes.txt)
 
 ### Contributing ###
 

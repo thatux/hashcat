@@ -7,6 +7,7 @@
 #include <inttypes.h>
 #include "common.h"
 #include "types.h"
+#include "backend.h"
 #include "modules.h"
 #include "bitops.h"
 #include "convert.h"
@@ -27,11 +28,10 @@
 
 #define YESCRYPT_HASH_B64_LEN 43
 
-// The loop kernel is cooperative: one workgroup owns one hash and threads 0 to PWXgather-1 are the
-// four pwxform lanes. A workgroup narrower than that leaves lanes unprocessed and silently computes
-// a wrong digest, so this is a hard floor and not a tuning preference.
+// The register-based cooperative kernel exchanges eight u64 words across eight threads.
+// Smaller workgroups wrap the shuffle indices and silently compute a wrong digest.
 
-#define YESCRYPT_MIN_THREADS 4
+#define YESCRYPT_MIN_THREADS 8
 
 // the only flag bit that changes the shape of the computation, see YESCRYPT_FLAG_RW in the kernel
 
@@ -626,7 +626,7 @@ u32 yescrypt_module_kernel_threads_min (MAYBE_UNUSED const hashconfig_t *hashcon
 
 u32 yescrypt_module_kernel_threads_max (MAYBE_UNUSED const hashconfig_t *hashconfig, MAYBE_UNUSED const user_options_t *user_options, MAYBE_UNUSED const user_options_extra_t *user_options_extra)
 {
-  const u32 kernel_threads_max = (user_options->kernel_threads_chgd == true) ? user_options->kernel_threads : YESCRYPT_THREADS;
+  const u32 kernel_threads_max = (user_options->kernel_threads_chgd == true) ? MAX (user_options->kernel_threads, YESCRYPT_MIN_THREADS) : YESCRYPT_THREADS;
 
   return kernel_threads_max;
 }
@@ -669,14 +669,35 @@ char *yescrypt_module_extra_tuningdb_block (MAYBE_UNUSED const hashconfig_t *has
 
   const u32 device_processors = device_param->device_processors;
 
-  const u64 fixed_mem = (128 * 1024 * 1024); // some storage we need for pws[], tmps[], and others
+  // Unified memory must also leave room for the backend's per-device host reserve.
 
-  const u64 usable_mem = MIN (device_param->device_available_mem, (device_param->device_maxmem_alloc * 4));
+  const u64 host_mem = (device_param->device_host_unified_memory == 1) ? BACKEND_HOST_MEM_RESERVE / backend_ctx->backend_devices_active : 0;
+
+  const u64 device_mem = (device_param->device_available_mem > host_mem) ? device_param->device_available_mem - host_mem : 0;
+
+  const u64 fixed_mem = (128ULL * 1024 * 1024);
+
+  const u64 usable_mem = MIN (device_mem, (device_param->device_maxmem_alloc * 4));
 
   // a device that reports less than the reserve would underflow this on a u64, and the accel
   // computed from the wrapped value asks for far more memory than the device has
 
   const u64 available_mem = (usable_mem > fixed_mem) ? usable_mem - fixed_mem : 0;
+
+  // The init and comp kernels keep the 128r byte state twice in private memory, and it spills. On an
+  // RTX 4090 the comp kernel's stack is 1696, 4704 and 8800 bytes per work item at r=8, 16 and 32. The
+  // runtime allocates that scratch at the first launch, after the V buffers, and sizes it for
+  // device_maxworkgroup_size work items on every processor rather than for our launch. spill_mem in
+  // scrypt_common.c makes the same assumption. On the 4090 at r=32 the launches ran with 1085 MiB left
+  // and failed with 1052 MiB, where that model gives 1100 MiB. The 2048 bytes on top of the two states
+  // cover the rest of the stack with room to spare, since the stack differs between compilers and
+  // architectures.
+
+  const u32 scrypt_r = (hashes->salts_buf[0].scrypt_r == 0) ? hashes->st_salts_buf[0].scrypt_r : hashes->salts_buf[0].scrypt_r;
+
+  const u64 spill_mem = ((2ULL * 128 * scrypt_r) + 2048) * device_processors * device_param->device_maxworkgroup_size;
+
+  const u64 spill_free = (available_mem > spill_mem) ? available_mem - spill_mem : 0;
 
   u32 kernel_accel_new;
 
@@ -691,6 +712,11 @@ char *yescrypt_module_extra_tuningdb_block (MAYBE_UNUSED const hashconfig_t *has
     // there is no TMTO to fall back on here, so leave a margin rather than trying to reclaim it later
 
     kernel_accel_new = (kernel_accel_new * 94) / 100;
+
+    // The margin has to hold the spill scratch as well, and on a card with many processors for its
+    // memory it does not.
+
+    kernel_accel_new = MIN (kernel_accel_new, (u32) (spill_free / size_per_accel));
 
     kernel_accel_new = MIN (kernel_accel_new, YESCRYPT_ACCEL_MAX);
 
@@ -832,13 +858,10 @@ char *yescrypt_module_jit_build_options (MAYBE_UNUSED const hashconfig_t *hashco
 
   const u32 expected_threads = yescrypt_expected_threads (hashconfig, user_options, user_options_extra, device_param);
 
-  // X can live in registers instead of local memory. Thread lid keeps every u64 of it whose
-  // index is lid modulo the thread count, which only works when 16r divides evenly by that
-  // count. Real hashes all have an even r, so this is the normal case and the block below is
-  // the fallback. It leaves local memory holding the Sbox and one u64 per thread for the lane
-  // exchange, instead of the Sbox and the whole 128r block.
+  // Register shuffles require a power-of-two workgroup within one 32-lane warp.
+  // The 16r words must also divide evenly across the threads.
 
-  const bool x_in_regs = (((16 * scrypt_r) % expected_threads) == 0);
+  const bool x_in_regs = (expected_threads >= 8) && (expected_threads <= 32) && ((expected_threads & (expected_threads - 1)) == 0) && (((16 * scrypt_r) % expected_threads) == 0);
 
   const u64 lds_x = (x_in_regs == true) ? (8ULL * expected_threads) : (128ULL * scrypt_r);
 

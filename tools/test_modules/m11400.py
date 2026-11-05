@@ -11,14 +11,28 @@ from lib.test_helpers import random_number, random_string
 
 # SIP digest authentication (RFC 2617). HA1 is md5 of user:realm:password, HA2 is md5 of the method
 # and URI, and the response is md5 of HA1, the nonce (with the qop fields when qop is set) and HA2.
+# With the MD5-sess algorithm, HA1 is hashed once more together with the nonce and the client
+# nonce, see RFC 2617 3.2.2.2.
 
 
 def _md5_hex(data):
   return hashlib.md5(data).hexdigest()
 
 
-def module_constraints():
-  return [[0, 24], [1, 15], [0, 24], [1, 15], [-1, -1]]
+def module_test_properties():
+  return {
+    'constraints': {
+      'pure': {
+        'password_length': [0, 24],
+        'salt_length': [1, 15],
+      },
+      'optimized': {
+        'password_length': [0, 24],
+        'salt_length': [1, 15],
+      },
+      'combined_length': None,
+    },
+  }
 
 
 def module_generate_hash(word, nonce, iterations=None, user=None, realm=None, nonce_count=None,
@@ -40,12 +54,12 @@ def module_generate_hash(word, nonce, iterations=None, user=None, realm=None, no
     uri_suffix = random_string(random_number(1, 32 + 1))
 
   if directive is None:
-    directive = "MD5"
+    directive = "MD5" if random_number(0, 1 + 1) == 1 else "MD5-sess"
 
   if uri_server is None:
     uri_server = random_string(random_number(1, 32 + 1))
 
-  if directive != "MD5":
+  if (directive != "MD5") and (directive != "MD5-sess"):
     return None
 
   if realm is None:
@@ -68,6 +82,11 @@ def module_generate_hash(word, nonce, iterations=None, user=None, realm=None, no
       nonce_count = ""
       nonce_client = ""
 
+      # MD5-sess takes a client nonce whether or not qop is set
+
+      if directive == "MD5-sess":
+        nonce_client = random_string(random_number(1, 12 + 1))
+
   uri = ""
 
   if len(uri_prefix) > 0:
@@ -81,6 +100,9 @@ def module_generate_hash(word, nonce, iterations=None, user=None, realm=None, no
   ha2 = _md5_hex((method + ":" + uri).encode("latin-1"))
 
   ha1 = _md5_hex((user + ":" + realm + ":").encode("latin-1") + word)
+
+  if directive == "MD5-sess":
+    ha1 = _md5_hex((ha1 + ":" + nonce + ":" + nonce_client).encode("latin-1"))
 
   if qop in ("auth", "auth-int"):
     tmp = nonce + ":" + nonce_count + ":" + nonce_client + ":" + qop
