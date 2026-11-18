@@ -117,6 +117,8 @@ jobs:
 
     name: Build ${{ matrix.os_name }} (${{ matrix.shared == 0 && 'Static' || 'Shared' }})
     runs-on: ${{ matrix.os == 'freebsd' && 'ubuntu-latest' || matrix.os }}
+    # Keep PR Action-cache read-only as each merge ref writes a cache copy otherwise.
+    cache-mode: ${{ github.event_name == 'pull_request' && 'read' || 'write' }}
     steps:
       - uses: actions/checkout@v7
         with:
