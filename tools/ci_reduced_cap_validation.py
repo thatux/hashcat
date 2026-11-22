@@ -113,7 +113,7 @@ def main():
   if action == "inventory":
     supported, capped = policies()
     assert len(supported) == 232
-    assert len(capped) == 23
+    assert len(capped) == 22
     print(json.dumps({"supported": supported, "capped": capped}))
   elif action == "audit":
     audit(int(sys.argv[2]), sys.argv[3])
