@@ -35,7 +35,19 @@ def inventory(manager):
       digit = int(str(mode)[3])
       prf = manager.VC_HASH_DIGIT[digit]
       boot = digit in manager.VC_BOOT_DIGITS
-      expected = 1 if boot else len(manager.VC_CASCADES[mode % 10])
+      expected = len(manager.VC_CASCADES[mode % 10])
+
+      if boot:
+        expected = 0
+        for cascade in manager.VC_CASCADES[mode % 10].values():
+          base = "hashcat_%s_%s_boot" % (prf, cascade)
+          directory = Path(manager.VC_TESTS_DIR)
+          direct = directory / (base + ".vc")
+          pim_files = [path for path in directory.glob(base + "_pim*.vc")
+                       if path.stem[len(base) + 4:].isdigit()]
+          if direct.is_file() or pim_files:
+            expected += 1
+        assert expected > 0, mode
     elif mode in manager.TC_MODES:
       family = "truecrypt"
       boot = (mode % 100) // 10 in manager.TC_BOOT_DIGITS

@@ -26,7 +26,8 @@ jobs:
           matrix=$(python3 tools/ci_container_validation.py matrix)
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
       - name: Build once for all jobs
-        run: make -j2
+        # Shared artifacts must run on runners with different CPU instruction sets.
+        run: make -j2 MARCH_NATIVE='-march=x86-64 -mtune=generic'
       - name: Package build
         run: tar -czf container-build.tar.gz hashcat libhashcat.so* modules/*.so bridges/*.so feeds/*.so
       - uses: actions/upload-artifact@v6
