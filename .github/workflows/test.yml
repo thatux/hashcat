@@ -34,7 +34,7 @@ jobs:
           clinfo
           lscpu
       - name: Build locally on each runner
-        run: make -j2
+        run: make -j2 hashcat modules/module_36200.so
       - name: Profile cold and warm kernels
         env:
           PROFILE_TIMEOUT: ${{ inputs.timeout }}

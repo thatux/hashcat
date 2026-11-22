@@ -73,6 +73,7 @@ def main():
   for width in widths:
     for cost, hash_value in hashes.items():
       cache = output / ("cache-n%d-v%d" % (cost, width))
+      cache.mkdir(exist_ok=True)
       command = ["stdbuf", "-o0", "-e0", "./hashcat", "-m", "36200", "-a", "3", "-D", "1", "--force", "--potfile-disable", "--logfile-disable", "--restore-disable", "--self-test-disable", "--backend-vector-width", str(width), "--cache-path", str(cache), "--task-time-breakdown", hash_value, "hashcat"]
       for temperature in ("cold", "warm"):
         path = output / ("n%d-v%d-%s.log" % (cost, width, temperature))
