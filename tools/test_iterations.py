@@ -73,7 +73,7 @@ def load_test_properties(mode):
     if name == "normal":
       allowed_parameters = {"iterations", "scrypt_n", "user_hash_iterations"}
     elif name == "reduced":
-      allowed_parameters = {"iterations", "scrypt_n"}
+      allowed_parameters = {"iterations", "scrypt_n", "argon2_memory_max", "argon2_passes_max"}
     else:
       allowed_parameters = {"iterations"}
     if not isinstance(parameters, dict) or set(parameters) - allowed_parameters:
@@ -81,8 +81,10 @@ def load_test_properties(mode):
     if any(type(value) is not int or value < 1 for value in parameters.values()):
       raise ValueError("m%05d.py: iteration counts must be positive integers" % mode)
     if name == "reduced":
-      if set(parameters) not in ({"iterations"}, {"scrypt_n"}):
-        raise ValueError("m%05d.py: reduced testing requires an encoded iteration or scrypt N count" % mode)
+      if set(parameters) not in ({"iterations"}, {"scrypt_n"}, {"argon2_memory_max", "argon2_passes_max"}):
+        raise ValueError("m%05d.py: reduced testing requires encoded iterations, scrypt N or Argon2 cost caps" % mode)
+      if parameters.get("argon2_memory_max", 64) < 64:
+        raise ValueError("m%05d.py: reduced Argon2 memory must allow eight lanes" % mode)
       scrypt_n = parameters.get("scrypt_n")
       if scrypt_n is not None and (scrypt_n < 1024 or scrypt_n & (scrypt_n - 1)):
         raise ValueError("m%05d.py: reduced scrypt N must be a power of two at least 1024" % mode)
