@@ -11,6 +11,7 @@
 
 #include "dynloader.h"
 #include "timer.h"
+#include "shared.h"
 
 const char *val2cstr_cl (cl_int CL_err)
 {
