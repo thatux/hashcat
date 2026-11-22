@@ -52,6 +52,10 @@ on:
     - cron: '0 1 * * 6'
   workflow_dispatch:
     inputs:
+      controls_only:
+        description: 'Only validate caps without a caller-supplied force flag'
+        type: boolean
+        default: false
       modes:
         description: 'Modes to test, "all" or a space separated list'
         default: 'all'
@@ -179,7 +183,7 @@ jobs:
 
   test:
     needs: [plan, build]
-    if: needs.plan.outputs.run == 'true'
+    if: needs.plan.outputs.run == 'true' && !inputs.controls_only
     runs-on: ubuntu-latest
     timeout-minutes: ${{ github.event_name == 'pull_request' && 90 || 180 }}
 
@@ -439,6 +443,7 @@ jobs:
           python-version: '3.14'
       - run: pip install -r tools/requirements.txt
       - name: Compare uncapped and capped yescrypt
+        if: ${{ !inputs.controls_only }}
         run: python3 tools/ci_reduced_cap_validation.py benchmark
       - name: Smoke test all capped policies
         if: always()

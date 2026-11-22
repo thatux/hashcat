@@ -98,7 +98,7 @@ def smoke():
   _, capped = policies()
   failed = []
   for mode in capped:
-    result = subprocess.run([sys.executable, "tools/test.py", "-S", "-m", str(mode), "-D", "1", "-f"])
+    result = subprocess.run([sys.executable, "tools/test.py", "-S", "-m", str(mode), "-D", "1"])
     if result.returncode != 0:
       failed.append(mode)
     audit(mode, "smoke")
