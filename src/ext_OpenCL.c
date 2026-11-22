@@ -10,6 +10,7 @@
 #include "ext_OpenCL.h"
 
 #include "dynloader.h"
+#include "timer.h"
 
 const char *val2cstr_cl (cl_int CL_err)
 {
@@ -648,7 +649,36 @@ int hc_clBuildProgram (void *hashcat_ctx, cl_program program, cl_uint num_device
 
   OCL_PTR *ocl = (OCL_PTR *) backend_ctx->ocl;
 
+  const bool profile = getenv ("HC_CI_CL_PROFILE") != NULL;
+
+  char *profile_options = NULL;
+
+  if ((getenv ("HC_CI_CL_NO_OPT") != NULL) && (options != NULL))
+  {
+    hc_asprintf (&profile_options, "%s -cl-opt-disable", options);
+
+    options = profile_options;
+  }
+
+  hc_timer_t profile_timer;
+
+  hc_timer_set (&profile_timer);
+
+  if (profile == true)
+  {
+    fprintf (stderr, "HC_PROFILE\tbuild\tbegin\t%s\n", options ? options : "");
+    fflush (stderr);
+  }
+
   const cl_int CL_err = ocl->clBuildProgram (program, num_devices, device_list, options, pfn_notify, user_data);
+
+  if (profile == true)
+  {
+    fprintf (stderr, "HC_PROFILE\tbuild\tend\t%.3f\t%d\n", hc_timer_get (profile_timer), CL_err);
+    fflush (stderr);
+  }
+
+  hcfree (profile_options);
 
   if (CL_err != CL_SUCCESS)
   {
@@ -666,7 +696,36 @@ int hc_clCompileProgram (void *hashcat_ctx, cl_program program, cl_uint num_devi
 
   OCL_PTR *ocl = (OCL_PTR *) backend_ctx->ocl;
 
+  const bool profile = getenv ("HC_CI_CL_PROFILE") != NULL;
+
+  char *profile_options = NULL;
+
+  if ((getenv ("HC_CI_CL_NO_OPT") != NULL) && (options != NULL))
+  {
+    hc_asprintf (&profile_options, "%s -cl-opt-disable", options);
+
+    options = profile_options;
+  }
+
+  hc_timer_t profile_timer;
+
+  hc_timer_set (&profile_timer);
+
+  if (profile == true)
+  {
+    fprintf (stderr, "HC_PROFILE\tcompile\tbegin\t%s\n", options ? options : "");
+    fflush (stderr);
+  }
+
   const cl_int CL_err = ocl->clCompileProgram (program, num_devices, device_list, options, num_input_headers, input_headers, header_include_names, pfn_notify, user_data);
+
+  if (profile == true)
+  {
+    fprintf (stderr, "HC_PROFILE\tcompile\tend\t%.3f\t%d\n", hc_timer_get (profile_timer), CL_err);
+    fflush (stderr);
+  }
+
+  hcfree (profile_options);
 
   if (CL_err != CL_SUCCESS)
   {
@@ -686,7 +745,36 @@ int hc_clLinkProgram (void *hashcat_ctx, cl_context context, cl_uint num_devices
 
   cl_int CL_err;
 
+  const bool profile = getenv ("HC_CI_CL_PROFILE") != NULL;
+
+  char *profile_options = NULL;
+
+  if ((getenv ("HC_CI_CL_NO_OPT") != NULL) && (options != NULL))
+  {
+    hc_asprintf (&profile_options, "%s -cl-opt-disable", options);
+
+    options = profile_options;
+  }
+
+  hc_timer_t profile_timer;
+
+  hc_timer_set (&profile_timer);
+
+  if (profile == true)
+  {
+    fprintf (stderr, "HC_PROFILE\tlink\tbegin\t%s\n", options ? options : "");
+    fflush (stderr);
+  }
+
   *program = ocl->clLinkProgram (context, num_devices, device_list, options, num_input_programs, input_programs, pfn_notify, user_data, &CL_err);
+
+  if (profile == true)
+  {
+    fprintf (stderr, "HC_PROFILE\tlink\tend\t%.3f\t%d\n", hc_timer_get (profile_timer), CL_err);
+    fflush (stderr);
+  }
+
+  hcfree (profile_options);
 
   if (CL_err != CL_SUCCESS)
   {
