@@ -6884,7 +6884,7 @@ def main():
                   help="hashcat --runtime in seconds for whichever path runs "
                        "(defaults: %d self-test, %d full, %d edge)" % (SELFTEST_RUNTIME, RUNTIME, EDGE_RUNTIME))
   ap.add_argument("--kernel-accel", dest="kernel_accel", type=int, default=None,
-                  help="hashcat --kernel-accel, to bound concurrent candidates and memory use")
+                  help="hashcat --kernel-accel, to bound concurrent candidates and memory use (requires -f)")
   ap.add_argument("-d", dest="backend_devices", default=None,
                   help="hashcat --backend-devices: 1 | 1,2 | ... (default: every device of the -D type)")
   # -O is accepted and does nothing, as in test.sh where optimized is already the default; -P is
