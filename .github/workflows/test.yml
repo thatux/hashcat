@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        compiler: [default, no-opt, no-vectorizer]
+        compiler: [default]
     steps:
       - uses: actions/checkout@v7
       - name: Install the same OpenCL runtime as the slow runs

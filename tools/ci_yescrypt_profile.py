@@ -63,7 +63,7 @@ def main():
   os.chdir(root)
   output = root / "yescrypt-profile"
   output.mkdir(exist_ok=True)
-  hashes = {cost: m36200.module_generate_hash(b"hashcat", "0123456789abcdef", params=params) for cost, params in ((4096, "j9T"), (1024, "j7T"))}
+  hashes = {cost: m36200.module_generate_hash(b"AAAA", "0123456789abcdef", params=params) for cost, params in ((4096, "j9T"), (1024, "j7T"))}
   for cost, hash_value in hashes.items():
     if not hash_value.startswith("$gy$j"):
       raise RuntimeError("libxcrypt did not produce the requested GOST-yescrypt vector: " + hash_value)
@@ -74,7 +74,7 @@ def main():
     for cost, hash_value in hashes.items():
       cache = output / ("cache-n%d-v%d" % (cost, width))
       cache.mkdir(exist_ok=True)
-      command = ["stdbuf", "-o0", "-e0", "./hashcat", "-m", "36200", "-a", "3", "-D", "1", "--force", "--potfile-disable", "--logfile-disable", "--restore-disable", "--self-test-disable", "--backend-vector-width", str(width), "--cache-path", str(cache), "--task-time-breakdown", hash_value, "hashcat"]
+      command = ["stdbuf", "-o0", "-e0", "./hashcat", "-m", "36200", "-a", "3", "-D", "1", "--force", "--potfile-disable", "--logfile-disable", "--restore-disable", "--self-test-disable", "--backend-vector-width", str(width), "--cache-path", str(cache), "--task-time-breakdown", hash_value, "AAAA"]
       previous_rc = 0
       for temperature, extra in (("cold", []), ("warm", []), ("warm-small-batch", ["-n", "1"])):
         if temperature == "warm" and previous_rc != 0:
