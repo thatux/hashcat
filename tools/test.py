@@ -1329,7 +1329,12 @@ def iteration_kernel_opts(mode, opts, generated=True):
     if option.split("=", 1)[0] in ("--kernel-accel", "-n") or (option.startswith("-n") and option[2:].isdigit()):
       return []
 
-  return ["--kernel-accel", str(accel)]
+  flags = ["--kernel-accel", str(accel)]
+
+  if "--force" not in opts and b"--force" not in opts:
+    flags.append("--force")
+
+  return flags
 
 
 def run_hashcat(opts, mode, target, stdin_bytes, attack=0, extra=(), generated_hash=True):
