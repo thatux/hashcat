@@ -3,6 +3,13 @@ run-name: yescrypt compile and execution profile
 
 on:
   workflow_dispatch:
+    inputs:
+      timeout:
+        description: Native invocation timeout in seconds
+        default: '1800'
+      widths:
+        description: Vector widths
+        default: '1 4'
 
 permissions:
   contents: read
@@ -15,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        compiler: [default, no-opt]
+        compiler: [default, no-opt, no-vectorizer]
     steps:
       - uses: actions/checkout@v7
       - name: Install the same OpenCL runtime as the slow runs
@@ -30,6 +37,9 @@ jobs:
         run: make -j2
       - name: Profile cold and warm kernels
         env:
+          PROFILE_TIMEOUT: ${{ inputs.timeout }}
+          PROFILE_WIDTHS: ${{ inputs.widths }}
+          CL_CONFIG_USE_VECTORIZER: ${{ matrix.compiler == 'no-vectorizer' && '0' || '1' }}
           HC_CI_CL_PROFILE: '1'
           HC_CI_CL_NO_OPT: ${{ matrix.compiler == 'no-opt' && '1' || '' }}
         run: |

@@ -68,13 +68,15 @@ def main():
     if not hash_value.startswith("$gy$j"):
       raise RuntimeError("libxcrypt did not produce the requested GOST-yescrypt vector: " + hash_value)
   outcomes = []
-  for width in (1, 4):
+  widths = [int(value) for value in os.environ.get("PROFILE_WIDTHS", "1 4").split()]
+  timeout = int(os.environ.get("PROFILE_TIMEOUT", "1800"))
+  for width in widths:
     for cost, hash_value in hashes.items():
       cache = output / ("cache-n%d-v%d" % (cost, width))
       command = ["stdbuf", "-o0", "-e0", "./hashcat", "-m", "36200", "-a", "3", "-D", "1", "--force", "--potfile-disable", "--logfile-disable", "--restore-disable", "--self-test-disable", "--backend-vector-width", str(width), "--cache-path", str(cache), "--task-time-breakdown", hash_value, "hashcat"]
       for temperature in ("cold", "warm"):
         path = output / ("n%d-v%d-%s.log" % (cost, width, temperature))
-        result = run_case(command, path, 1800)
+        result = run_case(command, path, timeout)
         result.update(n=cost, width=width, cache=temperature)
         outcomes.append(result)
         (output / "results.json").write_text(json.dumps(outcomes, indent=2) + "\n")
