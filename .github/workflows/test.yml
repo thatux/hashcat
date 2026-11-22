@@ -2,9 +2,9 @@
 ## Author......: See docs/credits.txt
 ## License.....: MIT
 ##
-# Fork-only validation for generated containers, including both cost selections.
+# Fork-only validation covers every container mode with both cost selections.
 name: test
-run-name: 'Generated containers: reduced and full costs'
+run-name: 'All 93 container modes: reduced and full costs'
 
 on:
   workflow_dispatch:
@@ -13,15 +13,37 @@ permissions:
   contents: read
 
 jobs:
-  generated:
-    name: 'generate and crack m${{ matrix.mode }} (${{ matrix.cost }})'
+  build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Plan all container modes
+        id: plan
+        run: |
+          matrix=$(python3 tools/ci_container_validation.py matrix)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+      - name: Build once for all jobs
+        run: make -j2
+      - name: Package build
+        run: tar -czf container-build.tar.gz hashcat libhashcat.so* modules/*.so bridges/*.so feeds/*.so
+      - uses: actions/upload-artifact@v6
+        with:
+          name: container-build
+          path: container-build.tar.gz
+          retention-days: 7
+
+  containers:
+    needs: build
+    name: '${{ matrix.kind }} m${{ matrix.mode }} (${{ matrix.cost }})'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        mode: [13721, 29421, 34100]
-        cost: [reduced, full]
+      max-parallel: 12
+      matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
     env:
       PYTHONUNBUFFERED: '1'
       NO_NON_ASCII: '1'
@@ -29,91 +51,55 @@ jobs:
       CONTAINER_COST: ${{ matrix.cost }}
     steps:
       - uses: actions/checkout@v7
-      - name: Install container creators and CPU OpenCL
+      - uses: actions/download-artifact@v6
+        with:
+          name: container-build
+      - name: Restore build
+        run: tar -xzf container-build.tar.gz
+      - name: Install creators and CPU OpenCL
         run: |
           wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
             | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
             | sudo tee /etc/apt/sources.list.d/oneAPI.list > /dev/null
           sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            intel-oneapi-runtime-opencl ocl-icd-libopencl1 clinfo \
+            cryptsetup-bin dmsetup e2fsprogs tcplay expect libfuse2t64
+          sudo modprobe dm_crypt
+          sudo modprobe loop
+          clinfo -l
+      - name: Install VeraCrypt creators
+        if: matrix.family == 'veracrypt' && matrix.kind == 'generated'
+        run: |
           curl --fail --location --retry 3 \
             https://github.com/veracrypt/VeraCrypt/releases/download/VeraCrypt_1.26.24/veracrypt-console-1.26.24-Ubuntu-24.04-amd64.deb \
             --output veracrypt-console.deb
           echo '0da064cde572ece5316368e7dca84c4c8cc8b7327da921c48187998b8725d4a2  veracrypt-console.deb' | sha256sum --check
-          sudo apt-get install -y --no-install-recommends \
-            build-essential intel-oneapi-runtime-opencl ocl-icd-libopencl1 clinfo \
-            cryptsetup-bin dmsetup e2fsprogs ./veracrypt-console.deb
-          sudo modprobe dm_crypt
-          clinfo -l
+          sudo apt-get install -y --no-install-recommends ./veracrypt-console.deb
           veracrypt --version
-          cryptsetup --version
+          if [ '${{ matrix.prf }}' = ripemd160 ]; then
+            curl --fail --location --retry 3 \
+              https://github.com/veracrypt/VeraCrypt/releases/download/VeraCrypt_1.25.9/veracrypt-console-1.25.9-Ubuntu-23.04-amd64.deb \
+              --output veracrypt-legacy.deb
+            echo '1a0499bf97eb463bf8ebed80ded401a6274fc30a4ed671b9cdeb4b04f289c6dc  veracrypt-legacy.deb' | sha256sum --check
+            dpkg-deb -x veracrypt-legacy.deb .ci-veracrypt-legacy
+            .ci-veracrypt-legacy/usr/bin/veracrypt --version
+          fi
       - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
       - name: Python dependencies
         run: pip install -r tools/requirements.txt
-      - name: Build
-        run: make -j2
-      - name: Generate, inspect and crack containers
-        run: |
-          python3 - <<'PY'
-          import importlib.util
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-          import sys
-
-          sys.path.insert(0, str(Path('tools').resolve()))
-          spec = importlib.util.spec_from_file_location('generated_container_manager', 'tools/test.py')
-          manager = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(manager)
-          mode = int(os.environ['CONTAINER_MODE'])
-          reduced = os.environ['CONTAINER_COST'] == 'reduced'
-          flag = '--artificially-low-iteration-count' if reduced else '--full-iteration-count'
-          sys.argv = ['tools/test.py', '-g', '-m', str(mode), '-P', '-a', '0', '-t', 'single',
-                      '-V', '1', '-D', '1', '-f', '--keep-tmp', '--logdir', 'ci-generated', flag]
-          rc = 0
-          try:
-            manager.main()
-          except SystemExit as exc:
-            rc = exc.code if isinstance(exc.code, int) else 2
-          expected = 6 if mode == 34100 else 5
-          outcome = {'mode': mode, 'cost': os.environ['CONTAINER_COST'], 'returncode': rc,
-                     'tests_passed': manager.TESTS_PASSED, 'expected': expected,
-                     'errors': manager.ERRORS, 'generation_skips': manager.GEN_SKIPS}
-          Path('generated-outcome.json').write_text(json.dumps(outcome, indent=2) + '\n')
-          print(json.dumps(outcome), flush=True)
-          if rc != 0 or manager.ERRORS or manager.GEN_SKIPS or manager.TESTS_PASSED != expected:
-            raise SystemExit(1)
-          if mode == 34100:
-            paths = sorted(Path(manager.LUKS2_TESTS_DIR).glob('*.img'))
-            assert len(paths) == expected
-            metadata = {}
-            for path in paths:
-              raw = subprocess.check_output(['sudo', '-n', 'cryptsetup', 'luksDump',
-                                             '--dump-json-metadata', str(path)])
-              data = json.loads(raw)
-              kdf = data['keyslots']['0']['kdf']
-              assert (kdf['type'], kdf['time'], kdf['memory'], kdf['cpus']) == (
-                'argon2id', 4, 32 if reduced else 16384, 1), kdf
-              metadata[path.name] = data
-            Path('generated-metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
-          else:
-            paths = sorted(Path(manager.VC_TESTS_DIR).glob('*.vc'))
-            assert len(paths) == expected
-            for path in paths:
-              assert ('_pim1.vc' in path.name) == reduced, path
-            pim, password = manager.veracrypt_generation_parameters()
-            assert pim == (1 if reduced else 0)
-            assert not reduced or len(password.decode('utf-8')) >= 20
-          PY
+      - name: Generate or read fixtures, inspect and crack
+        run: python3 tools/ci_container_validation.py run
       - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: 'generated-m${{ matrix.mode }}-${{ matrix.cost }}'
+          name: 'containers-m${{ matrix.mode }}-${{ matrix.cost }}'
           path: |
-            ci-generated/
-            generated-outcome.json
-            generated-metadata.json
+            ci-container/
+            container-outcome.json
+            container-metadata.json
+          retention-days: 7
