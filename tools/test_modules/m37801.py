@@ -26,7 +26,7 @@ def module_test_properties():
       'combined_length': None,
       'association_parameters': [{"iterations": (1, 3), "memory": 256, "parallelism": 1}],
     },
-    'reduced': {'parameters': {'argon2_memory_max': 256, 'argon2_passes_max': 2}},
+    'reduced': {'kernel_accel': 8, 'parameters': {'argon2_memory_max': 256, 'argon2_passes_max': 2}},
   }
 
 

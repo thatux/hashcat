@@ -46,7 +46,7 @@ def module_test_properties():
       'combined_length': None,
       'association_parameters': [{"iterations": (1, 3), "memory_kib": 4096, "parallelism": 1}],
     },
-    'reduced': {'parameters': {'iterations': 2}},
+    'reduced': {'kernel_accel': 8, 'parameters': {'iterations': 2}},
   }
 
 

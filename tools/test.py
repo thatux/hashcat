@@ -1317,10 +1317,26 @@ def verdict(c):
   return "OK"
 
 
+def iteration_kernel_opts(mode, opts, generated=True):
+  accel = test_iterations.iteration_kernel_accel(mode) if generated else None
+
+  if accel is None:
+    return []
+
+  for option in opts:
+    option = os.fsdecode(option)
+
+    if option.split("=", 1)[0] in ("--kernel-accel", "-n") or (option.startswith("-n") and option[2:].isdigit()):
+      return []
+
+  return ["--kernel-accel", str(accel)]
+
+
 def run_hashcat(opts, mode, target, stdin_bytes, attack=0, extra=(), generated_hash=True):
   global LAST_CMD, LAST_STDIN, LAST_ENV, CAPPED_MEM_SKIP
 
   cmd = [BIN] + with_bridge_opts(opts, mode) + module_opts(mode) + ["-a", str(attack), "-m", str(mode), target] + list(extra)
+  cmd += iteration_kernel_opts(mode, list(opts) + module_opts(mode) + list(extra), generated_hash)
   LAST_CMD = cmd
   LAST_STDIN = stdin_bytes
 
@@ -5360,6 +5376,7 @@ def edge_run(opts, mode, target, stdin_bytes, attack, extra):
   argv += [b"-a", str(attack).encode("ascii"), b"-m", str(mode).encode("ascii")]
   argv += [edge_as_bytes(target)]
   argv += [edge_as_bytes(x) for x in extra]
+  argv += [edge_as_bytes(x) for x in iteration_kernel_opts(mode, argv[1:])]
 
   LAST_CMD = argv
   LAST_STDIN = stdin_bytes

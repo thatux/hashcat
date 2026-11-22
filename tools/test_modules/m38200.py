@@ -30,7 +30,7 @@ def module_test_properties():
       'optimized': None,
       'combined_length': None,
     },
-    'runtime': {'compiled_cost': True, 'limit': 1024, 'scrypt': True},
+    'runtime': {'kernel_accel': 8, 'compiled_cost': True, 'limit': 1024, 'scrypt': True},
     'normal': {'parameters': {'scrypt_n': 16384}},
   }
 

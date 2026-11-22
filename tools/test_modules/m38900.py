@@ -30,7 +30,7 @@ def module_test_properties():
       'combined_length': None,
       'association_parameters': [{"t": (1, 3), "m": 256, "p": 1}],
     },
-    'reduced': {'parameters': {'argon2_memory_max': 512, 'argon2_passes_max': 2}},
+    'reduced': {'kernel_accel': 8, 'parameters': {'argon2_memory_max': 512, 'argon2_passes_max': 2}},
   }
 
 
