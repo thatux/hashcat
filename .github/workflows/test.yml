@@ -45,16 +45,7 @@ name: test
 
 # Name a manual run after the kinds it was dispatched with, so the run list shows "test: opt pure
 # (all)" rather than a column of identical "test".
-run-name: >-
-  ${{ github.event_name == 'workflow_dispatch'
-      && format('test: {0}{1}{2}{3}{4}({5})',
-                inputs.optimized && 'opt ' || '',
-                inputs.pure && 'pure ' || '',
-                inputs.bridge && 'bridge ' || '',
-                inputs.container && 'container ' || '',
-                inputs.edge && 'edge ' || '',
-                inputs.modes)
-      || format('test ({0})', github.event_name) }}
+run-name: Reduced policies with cap 8, optimized, pure, bridge and edge
 
 on:
   schedule:
@@ -167,14 +158,34 @@ jobs:
             python3 .github/workflows/ci_matrix.py test all $kinds_arg | tee -a "$GITHUB_OUTPUT"
           fi
 
-  test:
+  build:
     needs: plan
+    if: needs.plan.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check reduced policy inventory
+        run: python3 tools/ci_reduced_cap_validation.py inventory
+      - name: Build portable binaries once
+        run: make -j4 MARCH_NATIVE='-march=x86-64 -mtune=generic'
+      - name: Package build
+        run: tar -czf reduced-cap-build.tar.gz hashcat libhashcat.so* modules/*.so bridges/*.so feeds/*.so
+      - uses: actions/upload-artifact@v6
+        with:
+          name: reduced-cap-build
+          path: reduced-cap-build.tar.gz
+          retention-days: 7
+
+  test:
+    needs: [plan, build]
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: ${{ github.event_name == 'pull_request' && 90 || 180 }}
 
     strategy:
       fail-fast: false
+      max-parallel: 20
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
 
     name: test.py ${{ matrix.name }}
@@ -265,12 +276,16 @@ jobs:
             | sh -s -- -y --default-toolchain 1.85.0 --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Build
-        run: make -j$(nproc)
+      - uses: actions/download-artifact@v6
+        with:
+          name: reduced-cap-build
+      - name: Restore build
+        run: tar -xzf reduced-cap-build.tar.gz
 
       - name: test.py
         env:
           ARTIFICIALLY_LOW_ITERATION_COUNT: ${{ (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' && inputs.artificially_low_iterations) && 'true' || 'false' }}
+          PYTHONUNBUFFERED: '1'
           EVENT: ${{ github.event_name }}
           MODES: ${{ matrix.modes }}
           KIND: ${{ matrix.kind }}
@@ -344,6 +359,7 @@ jobs:
             fi
 
             cat "${log}"
+            python3 tools/ci_reduced_cap_validation.py audit "$mode" "$KIND" || rc=1
             echo "::endgroup::"
 
             if [ "${rc}" -ne 0 ]; then
@@ -387,14 +403,54 @@ jobs:
           overwrite: true
 
       - name: Upload the test logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: test-logs-${{ matrix.name }}
           path: |
             test_*/
             testpy_*.log
+            cap-audit/*.json
           if-no-files-found: ignore
+
+  cap-controls:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ARTIFICIALLY_LOW_ITERATION_COUNT: 'true'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: reduced-cap-build
+      - name: Restore build
+        run: tar -xzf reduced-cap-build.tar.gz
+      - name: Install CPU OpenCL
+        run: |
+          wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends intel-oneapi-runtime-opencl ocl-icd-libopencl1 clinfo
+          clinfo -l
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - run: pip install -r tools/requirements.txt
+      - name: Compare uncapped and capped yescrypt
+        run: python3 tools/ci_reduced_cap_validation.py benchmark
+      - name: Smoke test all capped policies
+        if: always()
+        run: python3 tools/ci_reduced_cap_validation.py smoke
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: reduced-cap-controls
+          path: |
+            cap-controls/
+            cap-audit/
+            test_*/
 
   timings:
     needs: [plan, test]
