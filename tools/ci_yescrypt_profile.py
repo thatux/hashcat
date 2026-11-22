@@ -76,11 +76,11 @@ def main():
       cache.mkdir(exist_ok=True)
       command = ["stdbuf", "-o0", "-e0", "./hashcat", "-m", "36200", "-a", "3", "-D", "1", "--force", "--potfile-disable", "--logfile-disable", "--restore-disable", "--self-test-disable", "--backend-vector-width", str(width), "--cache-path", str(cache), "--task-time-breakdown", hash_value, "hashcat"]
       previous_rc = 0
-      for temperature, extra in (("cold", []), ("warm", []), ("warm-no-warmup", ["--warmup-disable"])):
+      for temperature, extra in (("cold", []), ("warm", []), ("warm-small-batch", ["-n", "1"])):
         if temperature == "warm" and previous_rc != 0:
           continue
         path = output / ("n%d-v%d-%s.log" % (cost, width, temperature))
-        result = run_case(command[:3] + extra + command[3:], path, timeout)
+        result = run_case(command[:4] + extra + command[4:], path, timeout)
         result.update(n=cost, width=width, cache=temperature)
         outcomes.append(result)
         (output / "results.json").write_text(json.dumps(outcomes, indent=2) + "\n")
