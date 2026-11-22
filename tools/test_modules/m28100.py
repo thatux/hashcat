@@ -26,7 +26,7 @@ def module_test_properties():
       'optimized': None,
       'combined_length': None,
     },
-    'reduced': {'parameters': {'iterations': 2}},
+    'reduced': {'parameters': {'iterations': 2}, 'copy_hash': True},
   }
 
 
@@ -79,7 +79,7 @@ def module_generate_hash(word, salt, iter=None, mk=None, hmac=None, blob=None, m
 
   main_digest = hashlib.sha512(main_digest_seed + sub_digest).digest()
 
-  return "$WINHELLO$*SHA512*%i*%s*%s*%s*%s*%s*%s" % (
+  return "$WINHELLO$*SHA512*%05i*%s*%s*%s*%s*%s*%s" % (
     iter, salt_bin.hex(), main_digest.hex(), mk_bin.hex(),
     hmac_bin.hex(), blob_bin.hex(), magicv_bin.hex())
 
