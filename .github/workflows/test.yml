@@ -96,6 +96,8 @@ on:
       - 'deps/**'
       - 'Makefile'
       - 'tools/test.py'
+      - 'tools/test_feed_cases.py'
+      - 'Rust/feeds/**'
       - 'tools/test_iterations.py'
       - 'tools/test_module_runner.*'
       - 'tools/test_modules/**'
@@ -166,6 +168,53 @@ jobs:
           else
             python3 .github/workflows/ci_matrix.py test all $kinds_arg | tee -a "$GITHUB_OUTPUT"
           fi
+
+  feeds:
+    needs: plan
+    if: github.event_name != 'schedule' || needs.plan.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the Intel CPU Runtime for OpenCL
+        run: |
+          wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
+            | sudo tee /etc/apt/sources.list.d/oneAPI.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+               intel-oneapi-runtime-opencl ocl-icd-libopencl1 build-essential
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Install the Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain 1.85.0 --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build feed plugins and reference hash modes
+        run: make -j2 hashcat modules/module_00000.so modules/module_00010.so feeds
+
+      - name: Candidate feeds
+        run: |
+          fail=0
+          python3 tools/test.py --feeds -D 1 -f --logdir feed-default || fail=1
+          python3 tools/test.py --feeds -P -D 1 -f --logdir feed-pure || fail=1
+          exit "$fail"
+
+      - name: Upload feed logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: feed-logs
+          path: feed-*/
+          if-no-files-found: ignore
 
   test:
     needs: plan

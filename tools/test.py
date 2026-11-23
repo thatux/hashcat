@@ -5233,6 +5233,25 @@ def base_opts(args):
   return opts
 
 
+def run_feeds(args):
+  import test_feed_cases
+
+  def report_feed(verdict, message):
+    record(verdict)
+    note_verdict(verdict)
+    print(message, flush=True)
+    logfull_append(message)
+
+    if verdict != "OK":
+      logfull_append("%s, cmdline : %s" % (message, _cmdline(LAST_CMD, LAST_ENV)))
+
+  selected = test_feed_cases.FEEDS if args.feeds == "all" else args.feeds.split(",")
+  opts = base_opts(args)
+
+  with work_dir("test_py_feeds_") as tmp:
+    return test_feed_cases.run(tmp, ROOT, selected, opts, run_hashcat, report_feed)
+
+
 STDOUT_MODE = 2000
 
 
@@ -6892,6 +6911,8 @@ def main():
   ap.add_argument("--logdir", dest="logdir", nargs="?", const=AUTO_LOGDIR, default=None,
                   help="name the output folder (default test_<ts>/, as test.sh); it holds logfull.txt, "
                        "the reason and the cmdline for every skip and error")
+  ap.add_argument("--feeds", nargs="?", const="all", metavar="NAME,...",
+                  help="test candidate-feed plugins once using MD5 and salted MD5, optionally select feeds")
   ap.add_argument("--edge", dest="edge", action="store_true",
                   help="edge-case testing (the port of tools/test_edge.sh)")
   ap.add_argument("-K", dest="kernel", default="all", help="--edge: 0 pure | 1 optimized | all")
@@ -6907,6 +6928,22 @@ def main():
                   help=argparse.SUPPRESS)
 
   args = ap.parse_args()
+
+  if args.feeds is not None:
+    import test_feed_cases
+
+    selected = args.feeds.split(",")
+    if args.feeds != "all" and any(name not in test_feed_cases.FEEDS for name in selected):
+      ap.error("--feeds accepts all or a comma-separated selection of: " + ", ".join(test_feed_cases.FEEDS))
+
+    if args.mode != "all" or args.attack is not None or args.target != "all" or args.vector != "default" or args.kernel != "all" or args.attack_exec != "all":
+      ap.error("--feeds uses fixed modes, attacks and targets. Select kernels with -P or -O")
+
+    if args.jobs != 1 or args.edge or args.selftest_all or args.bridge or args.generate or args.minimal or args.test_coverage or args.list_container_modes or args.list_hardware_modes:
+      ap.error("--feeds runs serially and cannot be combined with another test suite")
+
+    if args.runtime is None:
+      args.runtime = 30
 
   # --test-coverage reads the source tree only, so it runs before the isolation and binary checks.
   if args.test_coverage:
@@ -6999,6 +7036,9 @@ def main():
 
   setup_outdir(args)
   atexit.register(finalize_outputs, "completed")
+
+  if args.feeds is not None:
+    sys.exit(run_feeds(args))
 
   if args.edge:
     sys.exit(run_edge(args))

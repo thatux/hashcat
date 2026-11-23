@@ -40,6 +40,21 @@ it as `from lib import gpg`.
 * For a mode that drives its own cipher chaining, see [m20011.py](m20011.py) and
 [lib/diskcryptor.py](lib/diskcryptor.py)
 
+#### Candidate-feed checks ####
+
+`python3 tools/test.py --feeds` runs a finite candidate-feed suite once, independently of the per-mode matrix. It uses MD5 and salted MD5 targets computed with Python's `hashlib`, checks the complete recovered password set, and includes targets that must remain uncracked. Build the feed plugins and both reference hash modes first. The Rust random feed requires a Rust toolchain.
+
+```sh
+make -j2 hashcat modules/module_00000.so modules/module_00010.so feeds
+python3 tools/test.py --feeds
+python3 tools/test.py --feeds -P
+python3 tools/test.py --feeds mask,hybrid,table
+```
+
+The suite covers stdin, wordlist, rule-based mask and hybrid feeds, PCFG, table substitutions, automatic association, PRINCE and both random implementations. Random feeds use a deterministic reference sequence with bounded limits and a seek case. Table cases include multi-byte UTF-8 sources, identity removal and longest matches. PCFG, table and PRINCE run both their default device engine and the host engine selected with `--slow-candidates`. The MD5 device engine requires pure kernels, so those cases always use pure kernels. Other cases use optimized kernels by default and pure kernels with `-P`. Each result prints its kernel family. This is representative plugin coverage, not every combination of feed settings.
+
+Use `-D 1 -f` on a CPU OpenCL machine, or `-D 2 -d 1` on a selected GPU. `--compute-sanitizer initcheck` instruments the same cases through the existing sanitizer wrapper. `--feeds` runs serially and cannot be combined with per-mode selections, `--edge`, `-S`, `--bridge` or `-g`. Missing plugins and incomplete recoveries fail the suite. CI runs the suite in its own job and uploads the logs.
+
 #### Reproducible runs ####
 
 `HCTEST_SEED` is worth knowing about. Set it, and a run repeats: the same salts, the same passwords,
