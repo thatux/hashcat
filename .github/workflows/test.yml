@@ -206,8 +206,8 @@ jobs:
       - name: Candidate feeds
         run: |
           fail=0
-          python3 tools/test.py --feeds -D 1 -f --logdir feed-default || fail=1
-          python3 tools/test.py --feeds -P -D 1 -f --logdir feed-pure || fail=1
+          python3 tools/test.py --feeds -D 1 --logdir feed-default || fail=1
+          python3 tools/test.py --feeds -P -D 1 --logdir feed-pure || fail=1
           exit "$fail"
 
       - name: Upload feed logs
