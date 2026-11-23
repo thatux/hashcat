@@ -32,7 +32,9 @@
 ## matrix entry carries a kind (opt, pure, bridge, container or edge). The test step
 ## below runs the one pass for its kind, so the kinds are parallel jobs rather
 ## than passes in one. The kernel kinds share the on-disk mode pool; container
-## has its own and runs once. A pull request is optimized only, for latency.
+## has its own and runs once. A pull request's per-mode matrix is optimized only,
+## for latency. The separate feed job runs finite MD5 and salted MD5 checks with
+## device and host generators, including pure kernels.
 ##
 ## The per-mode timings ci_matrix.py balances the shards with live in the Actions
 ## cache and nowhere else. .github/workflows/keepalive.yml reads them on Thursdays

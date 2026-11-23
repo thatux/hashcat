@@ -5249,7 +5249,22 @@ def run_feeds(args):
   opts = base_opts(args)
 
   with work_dir("test_py_feeds_") as tmp:
-    return test_feed_cases.run(tmp, ROOT, selected, opts, run_hashcat, report_feed)
+    rc = 1
+
+    try:
+      rc = test_feed_cases.run(tmp, ROOT, selected, opts, run_hashcat, report_feed)
+    finally:
+      if rc != 0 and OUTDIR is not None:
+        try:
+          parent = os.path.join(OUTDIR, "failed")
+          os.makedirs(parent, exist_ok=True)
+          saved = tempfile.mkdtemp(prefix="feeds-", dir=parent)
+          shutil.copytree(tmp, saved, dirs_exist_ok=True)
+          logfull_append("feed inputs saved: %s" % saved)
+        except OSError as exc:
+          logfull_append("! could not preserve feed inputs: %s" % exc)
+
+    return rc
 
 
 STDOUT_MODE = 2000

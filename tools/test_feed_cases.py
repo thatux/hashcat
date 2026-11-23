@@ -139,6 +139,13 @@ def run(directory, root, selected, opts, run_hashcat, report):
     target.write_bytes(b"\n".join(lines) + b"\n")
     # MD5's device candidate engine has a pure kernel only.
     options = [option for option in opts if not (case.device and option == "-O")]
+    engine = None
+
+    if case.feed in ("pcfg", "table", "prince"):
+      # Keep the feed's engine announcement so a host fallback cannot pass as device coverage.
+      options = [option for option in options if option != "--quiet"]
+      engine = "device" if case.device else "host"
+
     options += ["--outfile", str(outfile), "--outfile-format", "3"] + list(case.options)
     expected = set(case.words if case.expected is None else case.expected)
     expected_rc = 0 if expected == set(case.words) else 1
@@ -148,6 +155,17 @@ def run(directory, root, selected, opts, run_hashcat, report):
       recovered = [bytes.fromhex(line) for line in outfile.read_text(encoding="ascii").splitlines()] if outfile.exists() else []
       ok = rc == expected_rc and set(recovered) == expected and len(recovered) == len(expected)
       reason = "rc=%d, recovered %d/%d" % (rc, len(recovered), len(expected))
+
+      if engine is not None:
+        prefix = "%s: %s engine," % (case.feed, engine)
+
+        if case.feed == "pcfg" and case.device:
+          prefix = "pcfg: device engine il="
+
+        announced = any(line.strip().startswith(prefix.encode("ascii")) for line in output.splitlines())
+        ok = ok and announced
+        reason += ", %s engine %s" % (engine, "confirmed" if announced else "unconfirmed")
+
       if not ok:
         print(output.decode("utf-8", "replace"))
     except (OSError, ValueError) as exc:
