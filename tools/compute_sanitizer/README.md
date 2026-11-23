@@ -71,7 +71,7 @@ ID` entry).
 ## `run.py exec`: run one command
 
 ```
-tools/compute_sanitizer/run.py exec <test-name> [--tool memcheck|racecheck|synccheck|initcheck] [--leak-check no|full] [--padding N] -- <hashcat-command...>
+tools/compute_sanitizer/run.py exec <test-name> [--tool memcheck|racecheck|synccheck|initcheck] [--initcheck-address-space global|shared|all] [--leak-check no|full] [--padding N] -- <hashcat-command...>
 ```
 
 - Everything after `--` is the exact hashcat command, passed through as a
@@ -121,28 +121,29 @@ real primary fault as `secondary`: kept in the JSON for context, excluded
 from the primary PASS/FAIL count and from the terminal summary's main
 listing (a one-line note reports how many were omitted).
 
+### Initcheck address spaces
+
+Initcheck checks both global and shared memory by default through `--initcheck-address-space all`. Shared-memory initialization checking requires Compute Sanitizer 2025.4 or newer. The wrapper checks that the option is available and stops with an error if it is missing. Other sanitizer tools do not receive this option.
+
+Use `--initcheck-address-space shared` to check shared memory alone. For global-only checking, including older installations, explicitly select `--initcheck-address-space global`. This selection uses initcheck's original global-memory default without passing the newer option.
+
+Each execution records the full sanitizer argument list in `sanitizer-command.json`, including the selected address-space option when applicable.
+
 ## `run.py selftest`: the ground-truth baseline
 
 ```
 tools/compute_sanitizer/run.py selftest
 ```
 
-Three small, permanent, one-bug-each `.cu` fixtures under `modules/`
-(built via `nvcc -lineinfo`, same flag `run.py build` uses for hashcat
-itself), each checked against an exact expected finding kind in
-`modules/expected.json`:
+Small `.cu` fixtures under `modules/` are built via `nvcc -lineinfo` and checked against the expected findings in `modules/expected.json`. Selftest checks both global and shared memory and requires support for `--initcheck-address-space all`.
 
 - `oob_write.cu`: `InvalidGlobalWrite` (`memcheck`)
 - `oob_read.cu`: `InvalidGlobalRead` (`memcheck`)
 - `uninit_global.cu`: `UninitializedDeviceMemory` (`initcheck`)
+- `uninit_shared.cu`: `UninitializedDeviceMemory` (`initcheck`, shared memory)
+- `initialized_shared.cu`: no findings (`initcheck`, initialized control)
 
-All three were run against a real GPU during development and verified to
-produce exactly the expected finding, including the `initcheck`-specific log
-shape (`Address 0x...` instead of `memcheck`'s `Access at ... is out of
-bounds` / `and is N bytes after the nearest allocation ...` pair) and the
-`--print-limit`-truncation follow-up line (`N errors were not printed. Use
---print-limit ...`), which `triage.py` recognizes and discards rather than
-treating as a spurious extra finding.
+The uninitialized shared-memory fixture reads an unwritten volatile array. Its initialized control writes the same array and synchronizes before reading it. Both must execute successfully, and their expected findings must match, before the shared-memory check can be trusted.
 
 Run this after touching `triage.py`'s parsing/classification logic, or any
 time you want to confirm the tool itself is still correct before trusting it
@@ -179,6 +180,12 @@ untouched, so the scripts' existing pass/fail parsing is unaffected;
 Compute Sanitizer's own findings are written to a
 `tools/compute_sanitizer/results/sweep-<timestamp>/` directory instead,
 printed as a pointer at the end of the run.
+
+Initcheck sweeps inherit the `all` default. Set `SANITIZER_SWEEP_INITCHECK_ADDRESS_SPACE=global` or `shared` to select a narrower address space. For example, an older installation can retain global-only checking with:
+
+```
+SANITIZER_SWEEP_INITCHECK_ADDRESS_SPACE=global tools/test.py --edge -m 17010 --compute-sanitizer=initcheck
+```
 
 **Performance, measured**: the same GPG mode 17010 example hash that took
 18+ minutes under the earlier PoCL+Valgrind fast tier ran in **~13 seconds**

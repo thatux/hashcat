@@ -76,6 +76,8 @@ comgr-*/
 /tools/compute_sanitizer/modules/oob_write
 /tools/compute_sanitizer/modules/oob_read
 /tools/compute_sanitizer/modules/uninit_global
+/tools/compute_sanitizer/modules/uninit_shared
+/tools/compute_sanitizer/modules/initialized_shared
 
 Rust/feeds/*/target
 Rust/bridges/*/target

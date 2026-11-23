@@ -46,6 +46,23 @@ def find_compute_sanitizer():
     return None
 
 
+def initcheck_options(cs_bin, address_space="all"):
+    if address_space == "global":
+        return []
+
+    try:
+        result = subprocess.run([cs_bin, "--tool", "initcheck", "--help"],
+                                capture_output=True, text=True, timeout=10, check=True)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RuntimeError(f"failed to query initcheck options: {e}") from e
+
+    if "--initcheck-address-space" not in result.stdout + result.stderr:
+        raise RuntimeError("shared-memory initcheck requires Compute Sanitizer 2025.4 or newer. "
+                           "Upgrade Compute Sanitizer or explicitly select --initcheck-address-space global")
+
+    return ["--initcheck-address-space", address_space]
+
+
 def sanity_check_binary(binary):
     try:
         proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=30)
@@ -244,6 +261,12 @@ def cmd_exec(ns, sanitizer_passthrough, hc_cmd):
         print(f"ERROR: --tool must be one of {VALID_TOOLS}", file=sys.stderr)
         return 2
 
+    try:
+        tool_opts = initcheck_options(cs_bin, ns.initcheck_address_space) if ns.tool == "initcheck" else []
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
     hc_bin = hc_cmd[0]
     hc_bin_resolved = hc_bin if os.sep in hc_bin else shutil.which(hc_bin)
     if not hc_bin_resolved or not os.path.exists(hc_bin_resolved):
@@ -307,8 +330,9 @@ def cmd_exec(ns, sanitizer_passthrough, hc_cmd):
     ]
     # Never --error-exitcode: hashcat's own exit code must stay authoritative,
     # tracked completely separately from the sanitizer verdict (see README).
-    cs_cmd += sanitizer_passthrough
+    cs_cmd += tool_opts + sanitizer_passthrough
     cs_cmd += hc_cmd
+    (run_dir / "sanitizer-command.json").write_text(json.dumps(cs_cmd, indent=2) + "\n")
 
     try:
         proc = subprocess.run(cs_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -355,7 +379,7 @@ def _run_make_modules():
     return r.returncode == 0
 
 
-def _run_selftest_case(name, binary_path, cs_bin, tool, results_dir):
+def _run_selftest_case(name, binary_path, cs_bin, tool, results_dir, tool_opts=()):
     run_dir, ts = make_results_dir(results_dir, name)
     log_path = run_dir / "sanitizer.log"
 
@@ -363,8 +387,9 @@ def _run_selftest_case(name, binary_path, cs_bin, tool, results_dir):
         cs_bin, "--tool", tool, "--check-exit-code", "no", "--leak-check", "no",
         "--padding", "128",
         "--show-backtrace", "device", "--print-limit", "20", f"--log-file={log_path}",
-        str(binary_path),
     ]
+    cs_cmd += list(tool_opts) + [str(binary_path)]
+    (run_dir / "sanitizer-command.json").write_text(json.dumps(cs_cmd, indent=2) + "\n")
 
     try:
         proc = subprocess.run(cs_cmd, capture_output=True, text=True, timeout=120)
@@ -378,8 +403,14 @@ def _run_selftest_case(name, binary_path, cs_bin, tool, results_dir):
                               command=[str(binary_path)], hashcat_rc_raw=proc.returncode)
     triage.write_summary(run_dir, summary, str(log_path), case_label=name)
 
+    if proc.returncode != 0:
+        return False, None, None, f"fixture exited with code {proc.returncode}"
+
     if not summary["sanitizer"]["parse_ok"]:
         return False, None, None, "log parse failed"
+
+    if summary["sanitizer"]["total_errors_reported"] is None:
+        return False, None, None, "missing error summary"
 
     primary = [f for f in summary["errors"] if f.get("relevance") == "primary"]
     if primary:
@@ -387,6 +418,9 @@ def _run_selftest_case(name, binary_path, cs_bin, tool, results_dir):
         frame = f0.get("first_source_frame")
         loc = f"{frame['file']}:{frame['line']}" if frame else "unresolved"
         return True, f0["kind"], loc, None
+
+    if summary["sanitizer"]["total_errors_reported"] != 0:
+        return False, None, None, "reported errors without primary findings"
 
     return True, None, None, "no primary errors found"
 
@@ -401,6 +435,12 @@ def cmd_selftest(args):
     cs_bin = find_compute_sanitizer()
     if cs_bin is None:
         print("ERROR: compute-sanitizer not found", file=sys.stderr)
+        return 2
+
+    try:
+        initcheck_opts = initcheck_options(cs_bin)
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
     if not _run_make_modules():
@@ -418,7 +458,8 @@ def cmd_selftest(args):
         binary_path = MODULES_DIR / name
         tool = exp.get("tool", "memcheck")
 
-        ok, actual_kind, actual_loc, detail = _run_selftest_case(name, binary_path, cs_bin, tool, results_dir)
+        tool_opts = initcheck_opts if tool == "initcheck" else []
+        ok, actual_kind, actual_loc, detail = _run_selftest_case(name, binary_path, cs_bin, tool, results_dir, tool_opts)
         want_kind = exp.get("kind")
         passed = ok and actual_kind == want_kind
         all_ok = all_ok and passed
@@ -449,6 +490,8 @@ def build_exec_parser():
     p.add_argument("test_name")
     p.add_argument("--tool", default="memcheck", choices=VALID_TOOLS,
                     help="Compute Sanitizer tool to use (default: memcheck)")
+    p.add_argument("--initcheck-address-space", default="all", choices=("global", "shared", "all"),
+                    help="memory checked by initcheck (default: all). Global also supports older tools")
     p.add_argument("--leak-check", default="no", choices=("no", "full"))
     p.add_argument("--padding", type=int, default=128,
                     help="Compute Sanitizer --padding: bytes of tracked redzone appended after every "

@@ -10,5 +10,13 @@
   "uninit_global": {
     "tool": "initcheck",
     "kind": "UninitializedDeviceMemory"
+  },
+  "uninit_shared": {
+    "tool": "initcheck",
+    "kind": "UninitializedDeviceMemory"
+  },
+  "initialized_shared": {
+    "tool": "initcheck",
+    "kind": null
   }
 }
