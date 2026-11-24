@@ -1,0 +1,44 @@
+name: asan-leak
+
+on:
+  push:
+    branches:
+      - asan-leak-checks
+  pull_request:
+    paths:
+      - 'tools/asan/**'
+      - '.github/workflows/asan-leak.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-leaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build ASan hashcat and selected parser modules
+        run: make DEBUG=2 -j2 hashcat modules/module_00000.so modules/module_01500.so
+
+      - name: Build parser harness
+        run: tools/asan/build.sh
+
+      - name: Check CLI lifecycle
+        run: tools/asan/lifecycle.sh
+
+      - name: Check selected parsers
+        run: tools/asan/sweep.sh
+
+      - name: Upload sanitizer logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: asan-leak-logs
+          path: |
+            asan-lifecycle/
+            asan-sweep/
+          if-no-files-found: ignore
