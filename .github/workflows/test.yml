@@ -188,7 +188,8 @@ jobs:
             sudo mv /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources.disabled
           fi
           sudo find /var/lib/apt/lists -maxdepth 1 -type f -name '*ubuntu*' -delete
-          if apt-cache show build-essential > /dev/null 2>&1; then
+          sudo apt-get update
+          if apt-cache show clinfo > /dev/null 2>&1; then
             echo "Ubuntu package index remains available"
             exit 1
           fi
@@ -203,7 +204,7 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
             | sudo tee /etc/apt/sources.list.d/oneAPI.list > /dev/null
           sudo apt-get update
-          if ! apt-cache show build-essential > /dev/null 2>&1; then
+          if ! apt-cache show clinfo > /dev/null 2>&1; then
             . /etc/os-release
             # Restore Ubuntu sources when the runner image has no Ubuntu package index.
             cat <<EOF | sudo tee /etc/apt/sources.list.d/hashcat-ubuntu.sources > /dev/null
