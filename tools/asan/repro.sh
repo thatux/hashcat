@@ -104,7 +104,7 @@ export LD_LIBRARY_PATH="$CORE_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # of SetAlternateSignalStack", and because that abort produces no "runtime
 # error:" line, every ubsan repro looked like a clean pass. A false all-clear,
 # which is the one direction that must never fail silently.
-export ASAN_OPTIONS=detect_leaks=0:halt_on_error=0:use_sigaltstack=0
+export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=1:halt_on_error=0:use_sigaltstack=0"
 export MSAN_OPTIONS=use_sigaltstack=0
 export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0:use_sigaltstack=0
 

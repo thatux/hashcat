@@ -1,5 +1,7 @@
 # AddressSanitizer tooling for hashcat's host C
 
+The ASan sweeps and single-mode reproducer enable LeakSanitizer and classify its reports as findings. Run `tools/asan/lifecycle.sh` after a `make DEBUG=2` build to check three bounded CLI startup and shutdown paths without a GPU. The lifecycle check requires an ASan-instrumented executable and saves per-command logs in `asan-lifecycle/`.
+
 `tools/compute_sanitizer/` checks the CUDA kernels. This checks everything else:
 the hash-line parsers, the core string/convert helpers, and hashcat's own
 allocation handling under a real workload.
@@ -10,17 +12,9 @@ answers "did a kernel leave its allocation", and on this codebase it answers
 attacker-controlled input: a hash file from an untrusted source is parsed with
 pointer arithmetic, hex decoding and fixed-size buffers.
 
-## Prerequisite: `make DEBUG=2` must link
+## Prerequisite: `make DEBUG=2`
 
-`-fsanitize=address` is added to `CFLAGS` only, never to the link flags, so
-every target that pulls in `deps/unrar` fails with undefined `__asan_*`
-references. One line in `src/Makefile`'s `DEBUG=2` block fixes it:
-
-```make
-LFLAGS                  += -fsanitize=address
-```
-
-Without that, nothing here can be built.
+The debug build adds the selected sanitizer to both compile and link flags. Build the parser harness with a compatible sanitizer runtime.
 
 ## Two entry points
 

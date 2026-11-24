@@ -41,6 +41,7 @@ fi
 mkdir -p "$OUT/logs"
 LOG="$OUT/sweep.log"
 : > "$LOG"
+result=0
 
 # protect_shadow_gap=0 is REQUIRED. ASan maps its shadow gap PROT_NONE, and
 # CUDA's unified virtual addressing needs that range: without it cuInit()
@@ -49,7 +50,7 @@ LOG="$OUT/sweep.log"
 # use_sigaltstack=0 for the same reason it is set in sweep.sh and repro.sh:
 # under a clang runtime older than glibc 2.34 the sanitizer aborts before
 # main(), which would make every mode here look "clean" without running.
-export ASAN_OPTIONS="protect_shadow_gap=0:detect_leaks=0:halt_on_error=0:use_sigaltstack=0:log_path=$OUT/logs/asan"
+export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}protect_shadow_gap=0:detect_leaks=1:halt_on_error=0:use_sigaltstack=0:log_path=$OUT/logs/asan"
 
 # A DEBUG=2 SANITIZE=address,undefined tree emits UBSan checks too, and those
 # print to stderr rather than log_path, they land in $OUT/m<mode>.out. Set
@@ -67,7 +68,8 @@ for mode in $MODES; do
   rc=$?
   dur=$(( $(date +%s) - start ))
 
-  errs=$(cat "$OUT"/logs/asan.* 2>/dev/null | grep -c "ERROR: AddressSanitizer")
+  asan=$(grep -hFc "ERROR: AddressSanitizer" "$OUT"/logs/asan.* "$OUT/m${mode}.out" 2>/dev/null | awk -F: '{sum += $NF} END {print sum + 0}')
+  lsan=$(grep -hFc "ERROR: LeakSanitizer" "$OUT"/logs/asan.* "$OUT/m${mode}.out" 2>/dev/null | awk -F: '{sum += $NF} END {print sum + 0}')
 
   # UBSan does not use log_path: it prints "file.c:12:34: runtime error: ..."
   # to stderr, which lands in m<mode>.out. Checking only the ASan logs would
@@ -78,9 +80,12 @@ for mode in $MODES; do
   # file leaves uerrs empty, which the ${uerrs:-0} default below handles.
   uerrs=$(grep -c "runtime error:" "$OUT/m${mode}.out" 2>/dev/null)
 
-  if [ "${errs:-0}" -gt 0 ] || [ "${uerrs:-0}" -gt 0 ]; then
-    echo "m${mode}: *** ${errs} ASAN / ${uerrs} UBSAN ERRORS *** (${dur}s, rc=$rc)" | tee -a "$LOG"
+  if [ "$asan" -gt 0 ] || [ "$lsan" -gt 0 ] || [ "${uerrs:-0}" -gt 0 ]; then
+    result=1
+    echo "m${mode}: *** $asan ASAN / $lsan LSAN / ${uerrs:-0} UBSAN ERRORS *** (${dur}s, rc=$rc)" | tee -a "$LOG"
     grep -h -oP "ERROR: AddressSanitizer: \K.*" "$OUT"/logs/asan.* 2>/dev/null \
+      | sort -u | head -5 | sed 's/^/    /' | tee -a "$LOG"
+    grep -hF "ERROR: LeakSanitizer" "$OUT"/logs/asan.* "$OUT/m${mode}.out" 2>/dev/null \
       | sort -u | head -5 | sed 's/^/    /' | tee -a "$LOG"
     grep -hoP "^[^ ]+:\d+:\d+: runtime error: .*" "$OUT/m${mode}.out" 2>/dev/null \
       | sort -u | head -5 | sed 's/^/    /' | tee -a "$LOG"
@@ -88,7 +93,13 @@ for mode in $MODES; do
     mv "$OUT"/logs/asan.* "$OUT/findings/m${mode}/" 2>/dev/null
     [ "${uerrs:-0}" -gt 0 ] && cp "$OUT/m${mode}.out" "$OUT/findings/m${mode}/" 2>/dev/null
   elif [ "$rc" = "124" ]; then
+    result=1
     echo "m${mode}: TIMEOUT (1800s)" | tee -a "$LOG"
+  elif [ "$rc" != "0" ]; then
+    result=1
+    echo "m${mode}: NOT RUN (rc=$rc, ${dur}s)" | tee -a "$LOG"
+    mkdir -p "$OUT/findings/m${mode}"
+    cp "$OUT/m${mode}.out" "$OUT/findings/m${mode}/"
   else
     echo "m${mode}: clean (${dur}s)" >> "$LOG"
   fi
@@ -98,8 +109,5 @@ done
 
 echo "=== ASAN GPU SWEEP DONE ===" | tee -a "$LOG"
 grep -c ": clean"     "$LOG" | sed 's/^/clean modes:         /' | tee -a "$LOG"
-# Count finding lines by a substring they actually contain. Each reads
-# "m<mode>: *** N ASAN / M UBSAN ERRORS ***", so "UBSAN ERRORS" matches every
-# one (including pure-ASan lines, which still print "0 UBSAN ERRORS"), whereas
-# "ASAN ERRORS" is not a substring of that line and always counted 0.
-grep -c "UBSAN ERRORS" "$LOG" | sed 's/^/modes with findings: /' | tee -a "$LOG"
+grep -c "LSAN /" "$LOG" | sed 's/^/modes with findings: /' | tee -a "$LOG"
+exit "$result"
