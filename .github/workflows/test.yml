@@ -171,7 +171,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event_name == 'pull_request' && 90 || 180 }}
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 90 || 350 }}
 
     strategy:
       fail-fast: false
@@ -266,7 +266,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Build
-        run: make -j$(nproc)
+        run: make DEBUG=2 -j$(nproc)
 
       - name: test.py
         env:
@@ -302,6 +302,15 @@ jobs:
 
           fail=0
           failed_modes=""
+          leak_modes=""
+
+          # Every hashcat process test.py starts writes its sanitizer report to lsan_logs/cur. exitcode=0
+          # keeps a leak report from changing the exit code test.py checks. The ocl-icd loader keeps its
+          # platform table in globals that hashcat unmaps with dlclose, so its blocks are suppressed.
+          mkdir -p lsan_logs/cur
+          printf 'leak:hc_clGetPlatformIDs\n' > "$GITHUB_WORKSPACE/lsan.supp"
+          export ASAN_OPTIONS="detect_leaks=1:exitcode=0:use_sigaltstack=0:log_path=$GITHUB_WORKSPACE/lsan_logs/cur/asan"
+          export LSAN_OPTIONS="suppressions=$GITHUB_WORKSPACE/lsan.supp"
 
           for mode in $MODES; do
             echo "::group::test.py -m ${mode} ${OPTS}"
@@ -346,6 +355,33 @@ jobs:
             cat "${log}"
             echo "::endgroup::"
 
+            lsan_dir="lsan_logs/m${mode}_${KIND}"
+            reports=0
+            if compgen -G "lsan_logs/cur/asan.*" > /dev/null; then
+              mkdir -p "${lsan_dir}"
+              mv lsan_logs/cur/asan.* "${lsan_dir}/"
+              reports=$(cat "${lsan_dir}"/asan.* | grep -c -E 'ERROR: (Leak|Address)Sanitizer' || true)
+            fi
+
+            if [ "${reports}" -gt 0 ]; then
+              fail=1
+              leak_modes="${leak_modes} ${mode}(${KIND})"
+
+              # The first hashcat frame of each leak, outside the allocator wrappers in memory.c
+              origins=$(awk '/ leak of /{want=1; next} want && / in [A-Za-z_0-9]+ (src|include|modules|deps)\// && !/src\/memory\.c/ {for (i = 1; i < NF; i++) if ($i == "in") { print $(i + 1) " " $(i + 2); break } want=0}' "${lsan_dir}"/asan.* | sort | uniq -c | sort -rn || true)
+              echo "::error title=sanitizer report on mode ${mode} (${KIND})::${reports} report(s), first frames: $(echo "${origins}" | head -3 | tr -s ' ' | tr '\n' ';')"
+
+              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                {
+                  echo "### mode ${mode} (${KIND}): ${reports} sanitizer report(s)"
+                  echo '```'
+                  echo "${origins}" | head -20
+                  grep -h 'SUMMARY:' "${lsan_dir}"/asan.* | sort | uniq -c | sort -rn | head -10 || true
+                  echo '```'
+                } >> "${GITHUB_STEP_SUMMARY}"
+              fi
+            fi
+
             if [ "${rc}" -ne 0 ]; then
               fail=1
               failed_modes="${failed_modes} ${mode}(${KIND})"
@@ -371,8 +407,12 @@ jobs:
             fi
           done
 
-          if [ "${fail}" -ne 0 ]; then
+          if [ -n "${failed_modes}" ]; then
             echo "::error title=test.py failed::modes that failed:${failed_modes}"
+          fi
+
+          if [ -n "${leak_modes}" ]; then
+            echo "::error title=sanitizer reports::modes with reports:${leak_modes}"
           fi
 
           exit $fail
@@ -394,6 +434,7 @@ jobs:
           path: |
             test_*/
             testpy_*.log
+            lsan_logs/
           if-no-files-found: ignore
 
   timings:
