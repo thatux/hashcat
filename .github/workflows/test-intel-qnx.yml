@@ -1,0 +1,192 @@
+name: Intel OpenCL on Intel and AMD CPUs
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_ref:
+        description: 'Hashcat commit to test, independent of this validation branch'
+        required: true
+        default: ci-without-force
+      runner:
+        description: 'Runner image used to sample Intel and AMD CPUs'
+        type: choice
+        options: [ubuntu-latest, ubuntu-22.04, ubuntu-24.04]
+        default: ubuntu-latest
+      samples:
+        description: 'Hosted runners to sample for Intel and AMD CPU hardware'
+        type: choice
+        options: ['1', '8', '16']
+        default: '8'
+      mode:
+        description: 'Hash modes to validate on Intel CPU OpenCL'
+        type: choice
+        options: ['both', '1500', '19200']
+        default: 'both'
+
+permissions:
+  contents: read
+
+jobs:
+  qnx:
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        runner: ${{ fromJSON(format('["{0}"]', inputs.runner)) }}
+        sample: ${{ fromJSON(inputs.samples == '16' && '[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]' || inputs.samples == '8' && '[1,2,3,4,5,6,7,8]' || '[1]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Record physical CPU hardware
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          hardware = json.loads(subprocess.check_output(["lscpu", "--json"], env=dict(os.environ, LC_ALL="C"), text=True))
+          def flatten(rows):
+              result = {}
+              for row in rows:
+                  result[row["field"].rstrip(":")] = row.get("data")
+                  result.update(flatten(row.get("children", [])))
+              return result
+          fields = flatten(hardware["lscpu"])
+          hardware = {"vendor": fields.get("Vendor ID"), "model": fields.get("Model name")}
+          (Path(os.environ["RUNNER_TEMP"]) / "qnx-hardware.json").write_text(json.dumps(hardware) + "\n")
+          print("CPU vendor:", fields.get("Vendor ID"), "model:", fields.get("Model name"), flush=True)
+          if hardware["vendor"] not in ("GenuineIntel", "AuthenticAMD"):
+              raise SystemExit("This validation requires physical Intel or AMD CPU hardware")
+          PY
+
+      - uses: actions/checkout@v7
+
+      - name: Preserve validation scripts outside the tested checkout
+        run: |
+          mkdir "$RUNNER_TEMP/cpu-probes"
+          cp .github/workflows/check_descrypt.py .github/workflows/check_qnx_sha512.py "$RUNNER_TEMP/cpu-probes/"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.test_ref }}
+
+      - name: Install Intel CPU OpenCL
+        run: |
+          wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
+            | sudo tee /etc/apt/sources.list.d/oneAPI.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends intel-oneapi-runtime-opencl ocl-icd-libopencl1 build-essential
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Build DES, QNX SHA512 and candidate feeds
+        run: make -j2 hashcat modules/module_00000.so modules/module_01500.so modules/module_19200.so feeds
+
+      - name: Independent SHA512 and legacy QNX vectors
+        if: inputs.mode != '1500'
+        run: |
+          python3 "$RUNNER_TEMP/cpu-probes/check_qnx_sha512.py"
+
+      - name: Generated, published and edge vectors
+        if: success() && inputs.mode != '1500'
+        run: |
+          fail=0
+          python3 tools/test.py -m 19200 -a all -t all -D 1 --logdir qnx-optimized || fail=1
+          python3 tools/test.py -S -m 19200 -P -D 1 --full-iteration-count --logdir qnx-published || fail=1
+          python3 tools/test.py -m 19200 -a all -t all -P -D 1 --full-iteration-count --logdir qnx-full || fail=1
+          python3 tools/test.py -m 19200 -a all -t all -P -D 1 --artificially-low-iteration-count --logdir qnx-reduced || fail=1
+          python3 tools/test.py --edge -m 19200 -K 0 -D 1 --full-iteration-count --logdir qnx-edge || fail=1
+          exit "$fail"
+
+      - name: Independent DES salt and password vectors
+        if: success() && inputs.mode != '19200'
+        run: |
+          python3 "$RUNNER_TEMP/cpu-probes/check_descrypt.py"
+
+      - name: DES published, generated and edge vectors
+        if: success() && inputs.mode != '19200'
+        run: |
+          fail=0
+          python3 tools/test.py -m 1500 -a all -t all -D 1 --logdir descrypt-optimized || fail=1
+          python3 tools/test.py -S -m 1500 -P -D 1 --logdir descrypt-published || fail=1
+          python3 tools/test.py -m 1500 -a all -t all -P -D 1 --logdir descrypt-full || fail=1
+          python3 tools/test.py --edge -m 1500 -K 0 -D 1 --logdir descrypt-edge || fail=1
+          exit "$fail"
+
+      - name: Record CPU coverage
+        if: always()
+        env:
+          PASSED: ${{ job.status == 'success' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          coverage = json.loads((Path(os.environ["RUNNER_TEMP"]) / "qnx-hardware.json").read_text())
+          coverage["passed"] = os.environ["PASSED"] == "true"
+          coverage["commit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          Path("cpu-coverage.json").write_text(json.dumps(coverage) + "\n")
+          print(json.dumps(coverage))
+          PY
+
+      - name: Upload CPU coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cpu-runtime-coverage-${{ matrix.sample }}
+          path: cpu-coverage.json
+          if-no-files-found: ignore
+
+      - name: Upload CPU evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cpu-runtime-results-${{ matrix.sample }}
+          path: |
+            qnx-*/
+            descrypt-*/
+            ${{ runner.temp }}/qnx-hardware.json
+          if-no-files-found: ignore
+
+  coverage:
+    needs: qnx
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: cpu-runtime-coverage-*
+          path: coverage
+
+      - name: Require passing Intel and AMD CPU coverage
+        env:
+          TEST_REF: ${{ inputs.test_ref }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          records = [json.loads(path.read_text()) for path in Path("coverage").rglob("cpu-coverage.json")]
+          for record in records:
+              print(json.dumps(record))
+          passed = [record for record in records if record["passed"]]
+          vendors = {record["vendor"] for record in passed}
+          commits = {record["commit"] for record in passed}
+          if not {"GenuineIntel", "AuthenticAMD"}.issubset(vendors):
+              raise SystemExit("Passing tests on both physical Intel and AMD CPUs are required")
+          if len(commits) != 1:
+              raise SystemExit("All passing samples must test the same commit")
+          requested = os.environ["TEST_REF"]
+          if len(requested) == 40 and commits != {requested}:
+              raise SystemExit("The passing samples did not test the requested commit")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("Selected modes passed on physical Intel and AMD CPUs at %s. Optimized kernels are unavailable for these modes.\n" % next(iter(commits)))
+          PY
