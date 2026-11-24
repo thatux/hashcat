@@ -108,7 +108,7 @@ permissions:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     outputs:
       run: ${{ steps.plan.outputs.run }}
@@ -170,7 +170,7 @@ jobs:
   test:
     needs: plan
     if: needs.plan.outputs.run == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: ${{ github.event_name == 'pull_request' && 90 || 180 }}
 
     strategy:
@@ -402,7 +402,7 @@ jobs:
       !cancelled() && github.event_name != 'pull_request' && needs.plan.outputs.run == 'true'
       && (contains(needs.plan.outputs.matrix, 'opt') || contains(needs.plan.outputs.matrix, 'pure')
           || contains(needs.plan.outputs.matrix, 'bridge') || contains(needs.plan.outputs.matrix, 'edge'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
