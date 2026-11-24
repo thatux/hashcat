@@ -2465,6 +2465,12 @@ int hwmon_ctx_init (hashcat_ctx_t *hashcat_ctx)
     hcfree (hm_adapters_sysfs_cpu);
     hcfree (hm_adapters_iokit);
 
+    // hwmon_ctx_destroy () skips a context that was never enabled
+
+    hcfree (hwmon_ctx->hm_device);
+
+    hwmon_ctx->hm_device = NULL;
+
     return 0;
   }
 
