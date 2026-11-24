@@ -15,6 +15,8 @@ from Crypto.Cipher import AES
 
 from lib.test_helpers import random_number, random_bytes, pack_hex
 
+HASHCAT_ARGS = ["--deprecated-check-disable"]
+
 # WPA-EAPOL-PMK, HCCAPX output. Identical to mode 2500 except the candidate is the 32 byte PMK
 # itself (64 hex chars), so there is no PBKDF2 and the ESSID does not enter the key derivation (it
 # is still carried in the record). The PTK is a PRF over the MACs and nonces, and the MIC follows

@@ -10,6 +10,8 @@ import hmac
 
 from lib.test_helpers import random_bytes, pack_hex
 
+HASHCAT_ARGS = ["--deprecated-check-disable"]
+
 # WPA-PMKID-PMK: identical to mode 16800 except the candidate is the 32 byte PMK itself (64 hex
 # chars), so there is no PBKDF2 and no ESSID. The PMKID is the first half of HMAC-SHA1 of
 # "PMK Name", the AP MAC and the station MAC. The PMK is packed from the candidate the way mode

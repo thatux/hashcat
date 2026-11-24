@@ -10,6 +10,8 @@ import hmac
 
 from lib.test_helpers import random_bytes, random_number, runtime_iterations
 
+HASHCAT_ARGS = ["--deprecated-check-disable"]
+
 
 # WPA-PMKID-PBKDF2: the PMK is PBKDF2-HMAC-SHA1 of the passphrase over the ESSID, and the PMKID is
 # the first half of HMAC-SHA1 of "PMK Name", the AP MAC and the station MAC.

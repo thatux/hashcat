@@ -15,6 +15,8 @@ from Crypto.Cipher import AES
 
 from lib.test_helpers import random_number, random_bytes, runtime_iterations
 
+HASHCAT_ARGS = ["--deprecated-check-disable"]
+
 
 # WPA-EAPOL-PBKDF2, HCCAPX output. The PMK is PBKDF2-HMAC-SHA1 (4096 iterations) of the passphrase
 # salted by the ESSID, the PTK is a PRF over the MACs and nonces, and the MIC follows the key
