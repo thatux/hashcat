@@ -182,6 +182,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Simulate runner without Ubuntu package indexes
+        run: |
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo mv /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list.d/ubuntu.sources.disabled
+          fi
+          sudo find /var/lib/apt/lists -maxdepth 1 -type f -name '*ubuntu*' -delete
+          if apt-cache show build-essential > /dev/null 2>&1; then
+            echo "Ubuntu package index remains available"
+            exit 1
+          fi
+
       # The CPU runtime hashcat recommends, from Intel's oneAPI repository. Its
       # package registers the ICD itself.
 
