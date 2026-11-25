@@ -20,6 +20,21 @@ static int sort_by_salt_buf (const void *v1, const void *v2, MAYBE_UNUSED void *
   return sort_by_salt (v1, v2);
 }
 
+// scan_directory() allocates one string per file plus the array holding them, so both have to be
+// given back
+
+static void outfile_files_free (char **out_files)
+{
+  if (out_files == NULL) return;
+
+  for (int i = 0; out_files[i] != NULL; i++)
+  {
+    hcfree (out_files[i]);
+  }
+
+  hcfree (out_files);
+}
+
 static int outfile_remove (hashcat_ctx_t *hashcat_ctx, const bool once)
 {
   // some hash-dependent constants
@@ -132,7 +147,7 @@ static int outfile_remove (hashcat_ctx_t *hashcat_ctx, const bool once)
     {
       event_log_error (hashcat_ctx, "%s: %s", root_directory, strerror (errno));
 
-      hcfree (out_files);
+      outfile_files_free (out_files);
       hcfree (out_info);
 
       return -1;
@@ -173,7 +188,7 @@ static int outfile_remove (hashcat_ctx_t *hashcat_ctx, const bool once)
       }
 
       hcfree (out_info);
-      hcfree (out_files);
+      outfile_files_free (out_files);
 
       out_files = out_files_new;
       out_cnt   = out_cnt_new;
@@ -381,7 +396,7 @@ static int outfile_remove (hashcat_ctx_t *hashcat_ctx, const bool once)
 
   hcfree (out_info);
 
-  hcfree (out_files);
+  outfile_files_free (out_files);
 
   return 0;
 }
